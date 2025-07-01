@@ -51,9 +51,56 @@ impl Cpu {
     }
 
     /// Executes a single CPU step (fetch/decode/execute cycle).
-    /// Currently this is a stub and does nothing.
-    pub fn step(&mut self, _memory: &mut [u8; 0x10000]) {
-        // TODO: implement instruction decoding and execution
+    ///
+    /// Only a very small subset of instructions are currently supported. This
+    /// will be expanded over time as the emulator grows.
+    pub fn step(&mut self, memory: &mut [u8; 0x10000]) {
+        let opcode = memory[self.pc as usize];
+        self.pc = self.pc.wrapping_add(1);
+
+        match opcode {
+            // 0x00: NOP
+            0x00 => {}
+
+            // 0x06: LD B, d8
+            0x06 => {
+                let val = memory[self.pc as usize];
+                self.pc = self.pc.wrapping_add(1);
+                self.b = val;
+            }
+
+            // 0x0E: LD C, d8
+            0x0E => {
+                let val = memory[self.pc as usize];
+                self.pc = self.pc.wrapping_add(1);
+                self.c = val;
+            }
+
+            // 0x3E: LD A, d8
+            0x3E => {
+                let val = memory[self.pc as usize];
+                self.pc = self.pc.wrapping_add(1);
+                self.a = val;
+            }
+
+            // 0xAF: XOR A
+            0xAF => {
+                self.a ^= self.a;
+                self.f = 0;
+            }
+
+            // 0x04: INC B
+            0x04 => {
+                self.b = self.b.wrapping_add(1);
+            }
+
+            // 0x05: DEC B
+            0x05 => {
+                self.b = self.b.wrapping_sub(1);
+            }
+
+            op => panic!("Unimplemented opcode {op:02X}"),
+        }
     }
 }
 
@@ -75,6 +122,28 @@ mod tests {
         assert_eq!(cpu.l, 0x4D);
         assert_eq!(cpu.sp, 0xFFFE);
         assert_eq!(cpu.pc, 0x0100);
+    }
+
+    #[test]
+    fn step_executes_nop() {
+        let mut cpu = Cpu::new();
+        let mut mem = [0u8; 0x10000];
+        mem[0x0100] = 0x00; // NOP
+        cpu.reset();
+        cpu.step(&mut mem);
+        assert_eq!(cpu.pc, 0x0101);
+    }
+
+    #[test]
+    fn step_executes_ld_b_d8() {
+        let mut cpu = Cpu::new();
+        let mut mem = [0u8; 0x10000];
+        mem[0x0100] = 0x06; // LD B,d8
+        mem[0x0101] = 0x42;
+        cpu.reset();
+        cpu.step(&mut mem);
+        assert_eq!(cpu.b, 0x42);
+        assert_eq!(cpu.pc, 0x0102);
     }
 }
 
