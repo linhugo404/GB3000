@@ -76,6 +76,21 @@ impl Cpu {
                 self.c = val;
             }
 
+            // 0x16: LD D, d8
+            0x16 => {
+                let val = memory[self.pc as usize];
+                self.pc = self.pc.wrapping_add(1);
+                self.d = val;
+            }
+
+            // 0x1E: LD E, d8
+            0x1E => {
+                let val = memory[self.pc as usize];
+                self.pc = self.pc.wrapping_add(1);
+                self.e = val;
+            }
+
+
             // 0x3E: LD A, d8
             0x3E => {
                 let val = memory[self.pc as usize];
@@ -87,6 +102,66 @@ impl Cpu {
             0xAF => {
                 self.a ^= self.a;
                 self.f = 0;
+            }
+
+            // 0x0C: INC C
+            0x0C => {
+                self.c = self.c.wrapping_add(1);
+            }
+
+            // 0x0D: DEC C
+            0x0D => {
+                self.c = self.c.wrapping_sub(1);
+            }
+
+            // 0x14: INC D
+            0x14 => {
+                self.d = self.d.wrapping_add(1);
+            }
+
+            // 0x15: DEC D
+            0x15 => {
+                self.d = self.d.wrapping_sub(1);
+            }
+
+            // 0x1C: INC E
+            0x1C => {
+                self.e = self.e.wrapping_add(1);
+            }
+
+            // 0x1D: DEC E
+            0x1D => {
+                self.e = self.e.wrapping_sub(1);
+            }
+
+            // 0x24: INC H
+            0x24 => {
+                self.h = self.h.wrapping_add(1);
+            }
+
+            // 0x25: DEC H
+            0x25 => {
+                self.h = self.h.wrapping_sub(1);
+            }
+
+            // 0x2C: INC L
+            0x2C => {
+                self.l = self.l.wrapping_add(1);
+            }
+
+            // 0x2D: DEC L
+            0x2D => {
+                self.l = self.l.wrapping_sub(1);
+            }
+
+            // 0x3C: INC A
+            0x3C => {
+                self.a = self.a.wrapping_add(1);
+            }
+
+            // 0x3D: DEC A
+            0x3D => {
+                self.a = self.a.wrapping_sub(1);
             }
 
             // 0x04: INC B
@@ -144,6 +219,30 @@ mod tests {
         cpu.step(&mut mem);
         assert_eq!(cpu.b, 0x42);
         assert_eq!(cpu.pc, 0x0102);
+    }
+
+    #[test]
+    fn step_executes_ld_d_d8() {
+        let mut cpu = Cpu::new();
+        let mut mem = [0u8; 0x10000];
+        mem[0x0100] = 0x16; // LD D,d8
+        mem[0x0101] = 0x99;
+        cpu.reset();
+        cpu.step(&mut mem);
+        assert_eq!(cpu.d, 0x99);
+        assert_eq!(cpu.pc, 0x0102);
+    }
+
+    #[test]
+    fn step_executes_inc_c() {
+        let mut cpu = Cpu::new();
+        let mut mem = [0u8; 0x10000];
+        mem[0x0100] = 0x0C; // INC C
+        cpu.reset();
+        cpu.c = 0x01;
+        cpu.step(&mut mem);
+        assert_eq!(cpu.c, 0x02);
+        assert_eq!(cpu.pc, 0x0101);
     }
 }
 

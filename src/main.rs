@@ -6,8 +6,8 @@ use memory::Memory;
 use std::env;
 use std::fs;
 
-/// Entry point for the emulator. Currently this only creates the CPU and memory
-/// structures and performs a single step as a placeholder.
+/// Entry point for the emulator. This creates the CPU and memory structures and
+/// runs a very naive execution loop.
 fn main() {
     let args: Vec<String> = env::args().collect();
     let rom_path = args.get(1);
@@ -22,11 +22,9 @@ fn main() {
 
     cpu.reset();
 
-    // Run a few instructions as a placeholder until a real emulation loop is
-    // implemented.
-    for _ in 0..100 {
+    // Run the emulation loop until the process is terminated or an unimplemented
+    // instruction causes a panic.
+    loop {
         cpu.step(&mut memory.data);
     }
-
-    println!("CPU after execution: {:?}", cpu);
 }
