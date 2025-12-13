@@ -8,7 +8,7 @@ code as simple and approachable as possible.
 
 - **Full CPU emulation**: All 256 base opcodes and 256 CB-prefixed opcodes
 - **Accurate timing**: M-cycle accurate CPU with proper instruction timing
-- **Graphics (PPU)**: Background, window, and sprite rendering
+- **Cycle-exact PPU**: Variable Mode 3 length, sprite penalties, STAT interrupt edge detection
 - **Memory Bank Controllers**: Support for MBC1, MBC2, MBC3, and MBC5
 - **Timer**: DIV, TIMA, TMA, TAC with proper interrupt generation
 - **Interrupts**: VBlank, LCD STAT, Timer, Serial, and Joypad interrupts
@@ -70,6 +70,7 @@ cargo run --release -- --test test_roms/mooneye-test-suite/acceptance
 | Blargg DMG Sound | **12/12** ✓ | All APU register tests pass |
 | Mooneye MBC1 | **12/13** | 64KB RAM, 8MB/16MB ROM support |
 | Mooneye Timer | **11/13** | Accurate falling-edge detection |
+| Mooneye PPU | **4/12** | Mode timing, STAT interrupts |
 | Mooneye Acceptance | **19/41** | Multi-model + boot state |
 
 **Passing Acceptance Tests (19):**
@@ -118,7 +119,7 @@ The emulator can run commercial games including Pokemon Yellow with
 graphics and sound. Key compatibility notes:
 
 - **Audio**: Real-time audio output at 44.1kHz with high-pass filter
-- **PPU**: Simplified timing (not cycle-exact)
+- **PPU**: Cycle-exact with variable Mode 3 timing (4/12 tests pass)
 - **MBC1**: 12/13 tests pass (multicart edge case remaining)
 - **Timer**: Accurate falling-edge detection
 
@@ -128,8 +129,8 @@ graphics and sound. Key compatibility notes:
 - [ ] Save state support
 - [ ] Serial link emulation
 - [ ] Debugger/disassembler
-- [ ] Cycle-exact PPU timing
 - [ ] MBC1 multicart support
+- [ ] STAT interrupt blocking edge cases
 
 ## Resources
 
