@@ -3012,7 +3012,12 @@ mod tests {
     fn step_executes_nop() {
         let mut cpu = Cpu::new();
         let mut mem = Memory::new();
-        mem.data[0x0100] = 0x00;
+        
+        // Create a minimal ROM with NOP at 0x0100
+        let mut rom = vec![0u8; 0x8000]; // 32KB ROM
+        rom[0x0100] = 0x00; // NOP
+        mem.load_rom(&rom);
+        
         cpu.reset();
         cpu.step(&mut mem);
         assert_eq!(cpu.pc, 0x0101);
