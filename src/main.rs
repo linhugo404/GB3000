@@ -123,7 +123,8 @@ fn main() {
     )
     .expect("Failed to create window");
 
-    window.set_target_fps(60);
+    // Don't use minifb's rate limiting - we do our own
+    window.set_target_fps(0);
 
     // Create UI and emulator
     let mut ui = Ui::new();
@@ -138,10 +139,9 @@ fn main() {
     // Framebuffer
     let mut buffer = vec![0u32; UI_WIDTH * UI_HEIGHT];
 
-    // FPS tracking
-    let mut frame_count = 0u64;
+    // FPS tracking - use frames in last second for accurate current FPS
+    let mut frames_this_second = 0u32;
     let mut last_fps_time = Instant::now();
-    let start_time = Instant::now();
 
     // Load initial ROM if provided
     if let Some(path) = initial_rom {
@@ -272,14 +272,16 @@ fn main() {
             .update_with_buffer(&buffer, UI_WIDTH, UI_HEIGHT)
             .expect("Failed to update window");
 
-        // FPS tracking
-        frame_count += 1;
-        if last_fps_time.elapsed() >= Duration::from_secs(1) {
-            ui.fps = frame_count as f64 / start_time.elapsed().as_secs_f64();
+        // FPS tracking - count frames per second
+        frames_this_second += 1;
+        let fps_elapsed = last_fps_time.elapsed();
+        if fps_elapsed >= Duration::from_secs(1) {
+            ui.fps = frames_this_second as f64 / fps_elapsed.as_secs_f64();
+            frames_this_second = 0;
             last_fps_time = Instant::now();
         }
 
-        // Frame timing
+        // Frame timing - sleep to maintain 60 FPS
         let elapsed = frame_start.elapsed();
         let target = Duration::from_nanos(FRAME_TIME_NS);
         if elapsed < target {
