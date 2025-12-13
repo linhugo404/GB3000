@@ -15,25 +15,81 @@ code as simple and approachable as possible.
 - **Audio (APU)**: 4 sound channels with real-time audio output
 - **Input**: Full joypad support with keyboard mapping
 - **Multi-model support**: Accurate boot-up for DMG-0, DMG-ABC, MGB, SGB, SGB2
+- **Modern UI**: Native file dialogs, pause menu, recent ROMs
+- **Library + UI separation**: Use the emulator core with any frontend
 
 ## Screenshots
 
-The emulator renders the Game Boy screen at 160x144 resolution (scaled 4x) with
-a grayscale palette for clear visibility.
+The emulator features a modern UI with:
+- Start screen with ROM selection
+- Native file picker dialog
+- In-game pause menu (Escape key)
+- FPS counter overlay
+- Multiple color palettes
 
 ## Building
 
 Requires Rust 1.70 or later.
 
 ```sh
+# Build the desktop UI (includes emulator library)
 cargo build --release
+
+# Build just the library (no UI dependencies)
+cargo build --release --lib --no-default-features
 ```
 
 ## Running
 
 ```sh
+# Launch with file picker
+cargo run --release
+
+# Launch directly with a ROM
 cargo run --release -- path/to/rom.gb
 ```
+
+## Using as a Library
+
+The emulator core (`gb3000`) is a standalone library with no dependencies:
+
+```rust
+use gb3000::{Emulator, Button, palettes, SCREEN_WIDTH, SCREEN_HEIGHT};
+
+// Create and load ROM
+let mut emulator = Emulator::new();
+let rom = std::fs::read("game.gb").unwrap();
+emulator.load_rom(&rom);
+
+// Main loop
+loop {
+    // Run one frame
+    emulator.run_frame();
+    
+    // Get framebuffer (160x144, 2-bit color indices)
+    let pixels = emulator.framebuffer();
+    
+    // Convert to colors using a palette
+    for (i, &color_idx) in pixels.iter().enumerate() {
+        let color = palettes::GRAYSCALE[color_idx as usize];
+        // ... render pixel ...
+    }
+    
+    // Get audio samples (stereo f32 at 44.1kHz)
+    let audio = emulator.audio_samples();
+    
+    // Update input
+    emulator.set_button(Button::A, true);  // Press A
+    emulator.set_button(Button::A, false); // Release A
+}
+```
+
+### Available Palettes
+
+- `palettes::GRAYSCALE` - Clean black and white
+- `palettes::DMG_GREEN` - Classic Game Boy green
+- `palettes::POCKET` - Game Boy Pocket style
+- `palettes::SGB` - Super Game Boy warm tones
 
 ## Controls
 
@@ -104,14 +160,26 @@ The remaining failures are primarily:
 
 ## Architecture
 
-The emulator is organized into several modules:
+The project is split into a **library** (the emulator core) and a **binary** (the desktop UI):
 
-- **`cpu.rs`**: Sharp LR35902 CPU with all opcodes and flag handling
-- **`memory.rs`**: Memory management with MBC support and I/O registers
-- **`ppu.rs`**: Picture Processing Unit for graphics rendering
-- **`apu.rs`**: Audio Processing Unit for sound generation
-- **`timer.rs`**: Timer subsystem with DIV and TIMA counters
-- **`main.rs`**: Main emulator loop with window/input handling
+### Library (`gb3000`)
+
+The emulator core with zero external dependencies:
+
+- **`lib.rs`**: Public API - `Emulator`, `Button`, `palettes`
+- **`cpu.rs`**: Sharp LR35902 CPU with all opcodes
+- **`memory.rs`**: Memory management with MBC support
+- **`ppu.rs`**: Picture Processing Unit (cycle-exact)
+- **`apu.rs`**: Audio Processing Unit (4 channels)
+- **`timer.rs`**: Timer with DIV/TIMA
+
+### Binary (`gb3000-ui`)
+
+The desktop frontend (optional):
+
+- **`main.rs`**: Window, input, audio output
+- **`ui.rs`**: egui-based menus and overlays
+- **`test_runner.rs`**: Automated ROM testing
 
 ## Compatibility
 

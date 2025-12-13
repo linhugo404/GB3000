@@ -1,16 +1,47 @@
 [package]
-name = "GB3000"
+name = "gb3000"
 version = "0.1.0"
 edition = "2021"
 description = "An experimental Game Boy emulator written in Rust"
 authors = ["GB3000 Team"]
+license = "MIT"
+keywords = ["gameboy", "emulator", "retro", "gaming"]
+categories = ["emulators", "games"]
+
+[lib]
+name = "gb3000"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gb3000-ui"
+path = "src/main.rs"
 
 [dependencies]
-# Window and graphics
-minifb = "0.27"
+# Core emulator has no dependencies - it's pure Rust!
 
-# Audio output
-cpal = "0.15"
+[dev-dependencies]
+# For testing
 
-# For timing
-spin_sleep = "1.2"
+[features]
+default = ["desktop-ui"]
+desktop-ui = ["minifb", "cpal", "spin_sleep", "egui", "rfd"]
+
+[dependencies.minifb]
+version = "0.27"
+optional = true
+
+[dependencies.cpal]
+version = "0.15"
+optional = true
+
+[dependencies.spin_sleep]
+version = "1.2"
+optional = true
+
+[dependencies.egui]
+version = "0.28"
+optional = true
+
+[dependencies.rfd]
+version = "0.14"
+optional = true

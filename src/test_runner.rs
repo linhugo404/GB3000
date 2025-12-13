@@ -4,10 +4,10 @@
 /// 1. Blargg tests - output via serial port, "Passed"/"Failed" in output
 /// 2. Mooneye tests - execute LD B,B when done, Fibonacci registers on success
 
-use crate::cpu::{Cpu, GbModel};
-use crate::memory::Memory;
-use crate::ppu::Ppu;
-use crate::timer::Timer;
+use gb3000::cpu::{Cpu, GbModel};
+use gb3000::memory::Memory;
+use gb3000::ppu::Ppu;
+use gb3000::timer::Timer;
 
 /// Maximum cycles to run a test before timing out
 const MAX_CYCLES: u64 = 500_000_000; // ~120 seconds of emulated time
@@ -255,7 +255,7 @@ fn handle_interrupts(cpu: &mut Cpu, memory: &mut Memory) -> u32 {
     memory.data[cpu.sp as usize] = pc as u8;
 
     // Jump to interrupt handler (priority order)
-    use crate::memory::interrupts;
+    use gb3000::memory::interrupts;
     if pending & interrupts::VBLANK != 0 {
         memory.clear_interrupt(interrupts::VBLANK);
         cpu.pc = 0x0040;
