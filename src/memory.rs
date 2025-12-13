@@ -162,12 +162,55 @@ impl Memory {
             timer_tima_new_value: 0,
             timer_tma_written: false,
         };
-        // Initialize some registers to their power-on values
+        // Initialize registers to post-boot ROM values (DMG)
+        // These are the values after the boot ROM has finished executing
+        
+        // Joypad
+        mem.data[io::JOYP as usize] = 0xCF;
+        
+        // Timer - DIV is handled separately by Timer::reset_for_model
+        mem.data[io::TIMA as usize] = 0x00;
+        mem.data[io::TMA as usize] = 0x00;
+        mem.data[io::TAC as usize] = 0x00;
+        
+        // Sound registers
+        mem.data[io::NR10 as usize] = 0x80;
+        mem.data[io::NR11 as usize] = 0xBF;
+        mem.data[io::NR12 as usize] = 0xF3;
+        mem.data[io::NR14 as usize] = 0xBF;
+        mem.data[io::NR21 as usize] = 0x3F;
+        mem.data[io::NR22 as usize] = 0x00;
+        mem.data[io::NR24 as usize] = 0xBF;
+        mem.data[io::NR30 as usize] = 0x7F;
+        mem.data[io::NR31 as usize] = 0xFF;
+        mem.data[io::NR32 as usize] = 0x9F;
+        mem.data[io::NR34 as usize] = 0xBF;
+        mem.data[io::NR41 as usize] = 0xFF;
+        mem.data[io::NR42 as usize] = 0x00;
+        mem.data[io::NR43 as usize] = 0x00;
+        mem.data[io::NR44 as usize] = 0xBF;
+        mem.data[io::NR50 as usize] = 0x77;
+        mem.data[io::NR51 as usize] = 0xF3;
+        mem.data[io::NR52 as usize] = 0xF1; // DMG: 0xF1, SGB: 0xF0
+        
+        // PPU registers
         mem.data[io::LCDC as usize] = 0x91;
+        mem.data[io::STAT as usize] = 0x85; // Mode 1, coincidence flag set
+        mem.data[io::SCY as usize] = 0x00;
+        mem.data[io::SCX as usize] = 0x00;
+        mem.data[io::LY as usize] = 0x00; // Will be updated by PPU
+        mem.data[io::LYC as usize] = 0x00;
         mem.data[io::BGP as usize] = 0xFC;
         mem.data[io::OBP0 as usize] = 0xFF;
         mem.data[io::OBP1 as usize] = 0xFF;
-        mem.data[io::JOYP as usize] = 0xCF;
+        mem.data[io::WY as usize] = 0x00;
+        mem.data[io::WX as usize] = 0x00;
+        
+        // Interrupt registers
+        // After boot, no interrupts are pending initially (the boot ROM clears them)
+        mem.data[io::IF as usize] = 0xE0; // Unused bits 5-7 always read as 1
+        mem.data[io::IE as usize] = 0x00;
+        
         mem
     }
 
