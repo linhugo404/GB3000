@@ -31,6 +31,19 @@ pub enum GbModel {
     Cgb,
 }
 
+impl std::fmt::Display for GbModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GbModel::Dmg0 => write!(f, "dmg0"),
+            GbModel::DmgABC => write!(f, "dmgABC"),
+            GbModel::Mgb => write!(f, "mgb"),
+            GbModel::Sgb => write!(f, "sgb"),
+            GbModel::Sgb2 => write!(f, "sgb2"),
+            GbModel::Cgb => write!(f, "cgb"),
+        }
+    }
+}
+
 impl GbModel {
     /// Detect hardware model from ROM filename/path
     pub fn from_filename(filename: &str) -> Self {
@@ -2302,12 +2315,15 @@ impl Cpu {
                 }
             }
 
-            // PUSH BC
+            // PUSH BC - 16 cycles: fetch(4) + internal(4) + write_hi(4) + write_lo(4)
             0xC5 => {
-                tick(memory, 4); // Internal
+                // M2: Internal delay
+                tick(memory, 4);
+                // M3: Decrement SP, write high byte
                 self.sp = self.sp.wrapping_sub(1);
                 memory.write_byte(self.sp, self.b);
                 tick(memory, 4);
+                // M4: Decrement SP, write low byte
                 self.sp = self.sp.wrapping_sub(1);
                 memory.write_byte(self.sp, self.c);
                 tick(memory, 4);

@@ -53,6 +53,7 @@ pub fn run_test(rom_path: &str) -> TestResult {
 
     // Detect hardware model from filename
     let model = GbModel::from_filename(rom_path);
+    let model_str = model.to_string();
 
     // Initialize emulator components
     let mut cpu = Cpu::new();
@@ -62,6 +63,7 @@ pub fn run_test(rom_path: &str) -> TestResult {
 
     memory.load_rom(&rom);
     cpu.reset_for_model(model);
+    timer.reset_for_model(&model_str);
 
     // Serial output buffer
     let mut serial_output = String::new();

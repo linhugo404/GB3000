@@ -41,6 +41,28 @@ impl Timer {
         self.overflow_state = OverflowState::None;
     }
 
+    /// Set the internal DIV counter to a specific value
+    /// Used for accurate initialization after boot ROM
+    pub fn set_div_counter(&mut self, value: u16) {
+        self.div_counter = value;
+    }
+
+    /// Reset for a specific Game Boy model with accurate post-boot DIV value
+    pub fn reset_for_model(&mut self, model: &str) {
+        self.overflow_state = OverflowState::None;
+        // These values are the internal counter values after the boot ROM finishes
+        // DIV register = div_counter >> 8
+        // Values from Mooneye tests and hardware analysis
+        self.div_counter = match model {
+            "dmg0" => 0x267C, // DMG-0: DIV = 0x26 (early boot ROM)
+            "dmgABC" | "dmg" => 0xABCC, // DMG-ABC: DIV = 0xAB  
+            "mgb" => 0xABCC, // MGB: DIV = 0xAB (same as DMG-ABC)
+            "sgb" => 0xD294, // SGB: DIV = 0xD2
+            "sgb2" => 0xD294, // SGB2: Same as SGB
+            _ => 0xABCC, // Default to DMG-ABC
+        };
+    }
+
     /// Get the bit position to check for the given TAC frequency
     fn get_bit_position(tac: u8) -> u8 {
         match tac & 0x03 {
