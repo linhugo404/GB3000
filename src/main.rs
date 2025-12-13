@@ -7,11 +7,14 @@ mod timer;
 
 use apu::Apu;
 use cpu::Cpu;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use memory::{interrupts, Memory};
 use minifb::{Key, Scale, Window, WindowOptions};
 use ppu::{Ppu, SCREEN_HEIGHT, SCREEN_WIDTH};
 use std::env;
 use std::fs;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use timer::Timer;
 
@@ -95,7 +98,7 @@ impl Emulator {
         if intr_cycles > 0 {
             self.timer.tick(&mut self.memory, intr_cycles);
             self.ppu.tick(&mut self.memory, intr_cycles);
-            self.apu.tick(&self.memory, intr_cycles);
+            self.apu.tick(&mut self.memory, intr_cycles);
             for _ in 0..intr_cycles {
                 self.memory.tick_dma();
             }
@@ -111,7 +114,7 @@ impl Emulator {
         self.ppu.tick(&mut self.memory, cycles);
 
         // Update APU
-        self.apu.tick(&self.memory, cycles);
+        self.apu.tick(&mut self.memory, cycles);
 
         // Handle DMA
         for _ in 0..cycles {
@@ -220,12 +223,67 @@ impl Emulator {
             .map(|&color| PALETTE[color as usize & 0x03])
             .collect()
     }
+
+    /// Take audio samples from APU buffer
+    pub fn take_audio_samples(&mut self) -> Vec<f32> {
+        self.apu.take_samples()
+    }
 }
 
 impl Default for Emulator {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Audio buffer size constants
+const AUDIO_BUFFER_SIZE: usize = 4096;
+const AUDIO_LOW_WATER: usize = 1024;
+
+/// Set up audio output stream using cpal
+fn setup_audio(audio_buffer: Arc<Mutex<VecDeque<f32>>>) -> Option<cpal::Stream> {
+    let host = cpal::default_host();
+    let device = match host.default_output_device() {
+        Some(d) => d,
+        None => {
+            eprintln!("Warning: No audio output device found");
+            return None;
+        }
+    };
+
+    let config = cpal::StreamConfig {
+        channels: 2,
+        sample_rate: cpal::SampleRate(apu::SAMPLE_RATE),
+        buffer_size: cpal::BufferSize::Default,
+    };
+
+    // Track last sample for smooth transitions during underrun
+    let mut last_sample = 0.0f32;
+
+    let stream = device
+        .build_output_stream(
+            &config,
+            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                let mut buffer = audio_buffer.lock().unwrap();
+                
+                for sample in data.iter_mut() {
+                    if let Some(s) = buffer.pop_front() {
+                        *sample = s;
+                        last_sample = s;
+                    } else {
+                        // Fade to silence on underrun to avoid pops
+                        last_sample *= 0.9;
+                        *sample = last_sample;
+                    }
+                }
+            },
+            |err| eprintln!("Audio stream error: {}", err),
+            None,
+        )
+        .ok()?;
+
+    stream.play().ok()?;
+    Some(stream)
 }
 
 fn print_rom_info(rom: &[u8]) {
@@ -393,6 +451,12 @@ fn main() {
     // Set target FPS (limit to ~60 FPS)
     window.set_target_fps(60);
 
+    // Set up audio output with ring buffer
+    let audio_buffer: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::with_capacity(AUDIO_BUFFER_SIZE)));
+    let audio_buffer_clone = Arc::clone(&audio_buffer);
+
+    let _audio_stream = setup_audio(audio_buffer_clone);
+
     let mut frame_count = 0u64;
     let start_time = Instant::now();
     let mut last_fps_time = Instant::now();
@@ -412,6 +476,21 @@ fn main() {
         window
             .update_with_buffer(&framebuffer, SCREEN_WIDTH, SCREEN_HEIGHT)
             .expect("Failed to update window");
+
+        // Send audio samples to audio thread
+        let samples = emulator.take_audio_samples();
+        if !samples.is_empty() {
+            if let Ok(mut buffer) = audio_buffer.lock() {
+                // Add samples to ring buffer
+                for sample in samples {
+                    buffer.push_back(sample);
+                }
+                // Limit buffer size to prevent latency buildup
+                while buffer.len() > AUDIO_BUFFER_SIZE {
+                    buffer.pop_front();
+                }
+            }
+        }
 
         frame_count += 1;
 

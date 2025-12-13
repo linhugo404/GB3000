@@ -7,13 +7,14 @@ code as simple and approachable as possible.
 ## Features
 
 - **Full CPU emulation**: All 256 base opcodes and 256 CB-prefixed opcodes
-- **Accurate timing**: Cycle-accurate CPU with proper instruction timing
+- **Accurate timing**: M-cycle accurate CPU with proper instruction timing
 - **Graphics (PPU)**: Background, window, and sprite rendering
 - **Memory Bank Controllers**: Support for MBC1, MBC2, MBC3, and MBC5
 - **Timer**: DIV, TIMA, TMA, TAC with proper interrupt generation
 - **Interrupts**: VBlank, LCD STAT, Timer, Serial, and Joypad interrupts
-- **Audio (APU)**: 4 sound channels (pulse, wave, noise)
+- **Audio (APU)**: 4 sound channels with real-time audio output
 - **Input**: Full joypad support with keyboard mapping
+- **Multi-model support**: Accurate boot-up for DMG-0, DMG-ABC, MGB, SGB, SGB2
 
 ## Screenshots
 
@@ -107,12 +108,13 @@ The emulator is organized into several modules:
 
 ## Compatibility
 
-The emulator can run commercial games including Pokemon Yellow. However,
-some features may not be perfectly accurate:
+The emulator can run commercial games including Pokemon Yellow with
+graphics and sound. Key compatibility notes:
 
-- Cycle-exact PPU timing (simplified for now)
-- Some MBC edge cases
-- Audio mixing may not be perfect
+- **Audio**: Real-time audio output at 44.1kHz with high-pass filter
+- **PPU**: Simplified timing (not cycle-exact)
+- **MBC1**: 12/13 tests pass (multicart edge case remaining)
+- **Timer**: Accurate falling-edge detection
 
 ## Future Improvements
 
@@ -120,8 +122,8 @@ some features may not be perfectly accurate:
 - [ ] Save state support
 - [ ] Serial link emulation
 - [ ] Debugger/disassembler
-- [ ] More accurate PPU timing
-- [ ] Better audio quality
+- [ ] Cycle-exact PPU timing
+- [ ] MBC1 multicart support
 
 ## Resources
 

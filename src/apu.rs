@@ -31,6 +31,9 @@ pub struct Apu {
     pub buffer: Vec<f32>,
     /// Audio enabled flag
     enabled: bool,
+    /// High-pass filter state for left/right channels (removes DC offset and reduces pops)
+    hpf_left: f32,
+    hpf_right: f32,
 
     // Channel 1 (Pulse with sweep)
     ch1_enabled: bool,
@@ -110,6 +113,8 @@ impl Apu {
             frame_step: 0,
             buffer: Vec::with_capacity(1024),
             enabled: false,
+            hpf_left: 0.0,
+            hpf_right: 0.0,
 
             ch1_enabled: false,
             ch1_dac_enabled: false,
@@ -175,7 +180,7 @@ impl Apu {
     }
 
     /// Tick the APU by the given number of T-cycles
-    pub fn tick(&mut self, memory: &Memory, cycles: u32) {
+    pub fn tick(&mut self, memory: &mut Memory, cycles: u32) {
         // Update enabled state from NR52
         self.enabled = memory.data[io::NR52 as usize] & 0x80 != 0;
 
@@ -183,7 +188,7 @@ impl Apu {
             return;
         }
 
-        // Read channel parameters from memory
+        // Read channel parameters from memory (and handle triggers)
         self.read_channel_registers(memory);
 
         for _ in 0..cycles {
@@ -204,18 +209,19 @@ impl Apu {
             self.sample_counter += 1;
             if self.sample_counter >= CYCLES_PER_SAMPLE {
                 self.sample_counter = 0;
-                self.generate_sample(memory);
+                self.generate_sample_output(memory);
             }
         }
     }
 
-    fn read_channel_registers(&mut self, memory: &Memory) {
+    fn read_channel_registers(&mut self, memory: &mut Memory) {
         // Channel 1
         let nr10 = memory.data[io::NR10 as usize];
         self.ch1_sweep_period = (nr10 >> 4) & 0x07;
         self.ch1_sweep_negate = nr10 & 0x08 != 0;
         self.ch1_sweep_shift = nr10 & 0x07;
 
+        let nr11 = memory.data[io::NR11 as usize];
         let nr12 = memory.data[io::NR12 as usize];
         self.ch1_dac_enabled = nr12 & 0xF8 != 0;
 
@@ -223,8 +229,26 @@ impl Apu {
         let nr14 = memory.data[io::NR14 as usize];
         self.ch1_frequency = (nr13 as u16) | (((nr14 & 0x07) as u16) << 8);
         self.ch1_length_enabled = nr14 & 0x40 != 0;
+        
+        // Check for channel 1 trigger
+        if nr14 & 0x80 != 0 {
+            memory.data[io::NR14 as usize] &= 0x7F; // Clear trigger bit
+            if self.ch1_dac_enabled {
+                self.ch1_enabled = true;
+                self.ch1_length_counter = 64 - (nr11 & 0x3F);
+                self.ch1_timer = (2048 - self.ch1_frequency) * 4;
+                self.ch1_volume = nr12 >> 4;
+                self.ch1_envelope_timer = nr12 & 0x07;
+                self.ch1_envelope_period = nr12 & 0x07;
+                self.ch1_envelope_add = nr12 & 0x08 != 0;
+                self.ch1_sweep_shadow = self.ch1_frequency;
+                self.ch1_sweep_timer = if self.ch1_sweep_period > 0 { self.ch1_sweep_period } else { 8 };
+                self.ch1_sweep_enabled = self.ch1_sweep_period > 0 || self.ch1_sweep_shift > 0;
+            }
+        }
 
         // Channel 2
+        let nr21 = memory.data[io::NR21 as usize];
         let nr22 = memory.data[io::NR22 as usize];
         self.ch2_dac_enabled = nr22 & 0xF8 != 0;
 
@@ -232,11 +256,26 @@ impl Apu {
         let nr24 = memory.data[io::NR24 as usize];
         self.ch2_frequency = (nr23 as u16) | (((nr24 & 0x07) as u16) << 8);
         self.ch2_length_enabled = nr24 & 0x40 != 0;
+        
+        // Check for channel 2 trigger
+        if nr24 & 0x80 != 0 {
+            memory.data[io::NR24 as usize] &= 0x7F; // Clear trigger bit
+            if self.ch2_dac_enabled {
+                self.ch2_enabled = true;
+                self.ch2_length_counter = 64 - (nr21 & 0x3F);
+                self.ch2_timer = (2048 - self.ch2_frequency) * 4;
+                self.ch2_volume = nr22 >> 4;
+                self.ch2_envelope_timer = nr22 & 0x07;
+                self.ch2_envelope_period = nr22 & 0x07;
+                self.ch2_envelope_add = nr22 & 0x08 != 0;
+            }
+        }
 
         // Channel 3
         let nr30 = memory.data[io::NR30 as usize];
         self.ch3_dac_enabled = nr30 & 0x80 != 0;
 
+        let nr31 = memory.data[io::NR31 as usize];
         let nr32 = memory.data[io::NR32 as usize];
         self.ch3_volume_code = (nr32 >> 5) & 0x03;
 
@@ -244,18 +283,46 @@ impl Apu {
         let nr34 = memory.data[io::NR34 as usize];
         self.ch3_frequency = (nr33 as u16) | (((nr34 & 0x07) as u16) << 8);
         self.ch3_length_enabled = nr34 & 0x40 != 0;
+        
+        // Check for channel 3 trigger
+        if nr34 & 0x80 != 0 {
+            memory.data[io::NR34 as usize] &= 0x7F; // Clear trigger bit
+            if self.ch3_dac_enabled {
+                self.ch3_enabled = true;
+                self.ch3_length_counter = 256 - (nr31 as u16);
+                self.ch3_timer = (2048 - self.ch3_frequency) * 2;
+                self.ch3_position = 0;
+            }
+        }
 
         // Channel 4
+        let nr41 = memory.data[io::NR41 as usize];
         let nr42 = memory.data[io::NR42 as usize];
         self.ch4_dac_enabled = nr42 & 0xF8 != 0;
 
         let nr43 = memory.data[io::NR43 as usize];
         self.ch4_clock_shift = nr43 >> 4;
         self.ch4_width_mode = nr43 & 0x08 != 0;
-        self.ch4_divisor_code = nr43 & 0x07;
-
+        
         let nr44 = memory.data[io::NR44 as usize];
         self.ch4_length_enabled = nr44 & 0x40 != 0;
+        
+        // Check for channel 4 trigger
+        if nr44 & 0x80 != 0 {
+            memory.data[io::NR44 as usize] &= 0x7F; // Clear trigger bit
+            if self.ch4_dac_enabled {
+                self.ch4_enabled = true;
+                self.ch4_length_counter = 64 - (nr41 & 0x3F);
+                self.ch4_lfsr = 0x7FFF;
+                self.ch4_volume = nr42 >> 4;
+                self.ch4_envelope_timer = nr42 & 0x07;
+                self.ch4_envelope_period = nr42 & 0x07;
+                self.ch4_envelope_add = nr42 & 0x08 != 0;
+                let divisor: u32 = if nr43 & 0x07 == 0 { 8 } else { (nr43 & 0x07) as u32 * 16 };
+                self.ch4_timer = divisor << self.ch4_clock_shift;
+            }
+        }
+        self.ch4_divisor_code = nr43 & 0x07;
     }
 
     fn tick_channel1(&mut self) {
@@ -456,7 +523,7 @@ impl Apu {
         new_freq
     }
 
-    fn generate_sample(&mut self, memory: &Memory) {
+    fn generate_sample_output(&mut self, memory: &Memory) {
         let nr50 = memory.data[io::NR50 as usize];
         let nr51 = memory.data[io::NR51 as usize];
 
@@ -530,9 +597,17 @@ impl Apu {
         left = (left / 4.0) * left_volume;
         right = (right / 4.0) * right_volume;
 
-        // Output stereo sample (interleaved)
-        self.buffer.push(left);
-        self.buffer.push(right);
+        // Apply high-pass filter to remove DC offset and reduce pops
+        // This simulates the capacitor in the Game Boy's audio output
+        const HPF_FACTOR: f32 = 0.999;
+        self.hpf_left = self.hpf_left * HPF_FACTOR + left;
+        self.hpf_right = self.hpf_right * HPF_FACTOR + right;
+        let left_out = left - self.hpf_left * (1.0 - HPF_FACTOR);
+        let right_out = right - self.hpf_right * (1.0 - HPF_FACTOR);
+
+        // Output stereo sample (interleaved) with slight volume reduction
+        self.buffer.push(left_out * 0.5);
+        self.buffer.push(right_out * 0.5);
     }
 
     /// Trigger channel 1
@@ -623,6 +698,11 @@ impl Apu {
     /// Clear audio buffer
     pub fn clear_buffer(&mut self) {
         self.buffer.clear();
+    }
+
+    /// Take all samples from buffer (drains it)
+    pub fn take_samples(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.buffer)
     }
 }
 
