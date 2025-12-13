@@ -16,8 +16,8 @@ use crate::memory::{io, interrupts, Memory};
 enum OverflowState {
     /// Normal operation
     None,
-    /// TIMA overflowed, waiting for reload (cycles remaining)
-    Pending(u8),
+    /// TIMA overflowed, waiting for reload (cycles remaining, cached TMA value)
+    Pending(u8, u8),
 }
 
 #[derive(Debug)]
@@ -26,8 +26,6 @@ pub struct Timer {
     div_counter: u16,
     /// Overflow state for delayed TMA reload
     overflow_state: OverflowState,
-    /// TMA value to load when overflow completes
-    pending_tma: u8,
 }
 
 impl Timer {
@@ -35,14 +33,12 @@ impl Timer {
         Self {
             div_counter: 0,
             overflow_state: OverflowState::None,
-            pending_tma: 0,
         }
     }
 
     pub fn reset(&mut self) {
         self.div_counter = 0;
         self.overflow_state = OverflowState::None;
-        self.pending_tma = 0;
     }
 
     /// Get the bit position to check for the given TAC frequency
@@ -97,6 +93,9 @@ impl Timer {
                 self.overflow_state = OverflowState::None;
             }
         }
+        
+        // TMA writes don't need special handling - we already cached TMA at overflow start
+        memory.timer_tma_written = false;
     }
 
     /// Advance the timer by a single T-cycle.
@@ -112,14 +111,14 @@ impl Timer {
 
         // Handle overflow state
         match self.overflow_state {
-            OverflowState::Pending(1) => {
-                // Reload TIMA with TMA and request interrupt
-                memory.data[io::TIMA as usize] = memory.data[io::TMA as usize];
+            OverflowState::Pending(1, tma_value) => {
+                // Reload TIMA with cached TMA value and request interrupt
+                memory.data[io::TIMA as usize] = tma_value;
                 memory.request_interrupt(interrupts::TIMER);
                 self.overflow_state = OverflowState::None;
             }
-            OverflowState::Pending(n) => {
-                self.overflow_state = OverflowState::Pending(n - 1);
+            OverflowState::Pending(n, tma) => {
+                self.overflow_state = OverflowState::Pending(n - 1, tma);
             }
             OverflowState::None => {}
         }
@@ -138,8 +137,10 @@ impl Timer {
         
         if overflow {
             // TIMA becomes 0, and after 4 cycles it will be reloaded with TMA
+            // Cache the TMA value now - writes to TMA during the window won't affect reload
+            let tma = memory.data[io::TMA as usize];
             memory.data[io::TIMA as usize] = 0;
-            self.overflow_state = OverflowState::Pending(4);
+            self.overflow_state = OverflowState::Pending(4, tma);
         } else {
             memory.data[io::TIMA as usize] = new_tima;
         }
@@ -194,7 +195,7 @@ impl Timer {
 
     /// Check if we're in the overflow window (for detecting writes)
     pub fn in_overflow_window(&self) -> bool {
-        matches!(self.overflow_state, OverflowState::Pending(_))
+        matches!(self.overflow_state, OverflowState::Pending(_, _))
     }
 }
 

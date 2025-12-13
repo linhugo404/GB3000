@@ -336,7 +336,15 @@ fn main() {
         
         for result in &results {
             let status = if result.passed { "✓ PASS" } else { "✗ FAIL" };
-            println!("{} {}", status, result.name);
+            println!("{} {} ({} cycles)", status, result.name, result.cycles);
+            if !result.passed {
+                if let Some(ref err) = result.error {
+                    println!("  Error: {}", err);
+                }
+                if !result.output.is_empty() {
+                    println!("  Output: {}", result.output.chars().take(100).collect::<String>());
+                }
+            }
         }
         
         println!();

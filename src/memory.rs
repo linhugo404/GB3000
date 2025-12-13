@@ -115,6 +115,7 @@ pub struct Memory {
     pub timer_tac_old_value: u8,
     pub timer_tima_written: bool,
     pub timer_tima_new_value: u8,
+    pub timer_tma_written: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -150,6 +151,7 @@ impl Memory {
             timer_tac_old_value: 0,
             timer_tima_written: false,
             timer_tima_new_value: 0,
+            timer_tma_written: false,
         };
         // Initialize some registers to their power-on values
         mem.data[io::LCDC as usize] = 0x91;
@@ -493,6 +495,12 @@ impl Memory {
                 // Timer counter - writing during overflow window cancels reload
                 self.timer_tima_written = true;
                 self.timer_tima_new_value = value;
+                self.data[addr as usize] = value;
+            }
+            
+            io::TMA => {
+                // Timer modulo - notify timer of write (affects reload value)
+                self.timer_tma_written = true;
                 self.data[addr as usize] = value;
             }
             

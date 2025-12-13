@@ -151,6 +151,11 @@ pub fn run_test(rom_path: &str) -> TestResult {
 
         // Update PPU (simplified - we don't need full rendering for tests)
         ppu.tick(&mut memory, cycles);
+        
+        // Update DMA (once per cycle)
+        for _ in 0..cycles {
+            memory.tick_dma();
+        }
 
         // Check serial output
         // When SC (0xFF02) has bit 7 set and bit 0 set, a byte is being sent
@@ -249,11 +254,20 @@ fn handle_interrupts(cpu: &mut Cpu, memory: &mut Memory) {
     }
 }
 
-/// Run all tests in a directory
-pub fn run_all_tests(test_dir: &str) -> Vec<TestResult> {
+/// Run all tests in a directory or a single test file
+pub fn run_all_tests(test_path: &str) -> Vec<TestResult> {
     let mut results = Vec::new();
 
-    let paths: Vec<_> = std::fs::read_dir(test_dir)
+    let path = std::path::Path::new(test_path);
+    
+    // If it's a single .gb file, run just that test
+    if path.is_file() && path.extension().map(|e| e == "gb").unwrap_or(false) {
+        let result = run_test(test_path);
+        results.push(result);
+        return results;
+    }
+
+    let paths: Vec<_> = std::fs::read_dir(test_path)
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
