@@ -1,1 +1,6 @@
 /target
+.DS_Store
+
+# ROM files
+*.gb
+*.gbc

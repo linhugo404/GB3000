@@ -2,5 +2,15 @@
 name = "GB3000"
 version = "0.1.0"
 edition = "2021"
+description = "An experimental Game Boy emulator written in Rust"
+authors = ["GB3000 Team"]
 
 [dependencies]
+# Window and graphics
+minifb = "0.27"
+
+# Audio output
+cpal = "0.15"
+
+# For timing
+spin_sleep = "1.2"
