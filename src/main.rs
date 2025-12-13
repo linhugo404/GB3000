@@ -16,8 +16,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use ui::{EmulatorState, RomInfo, Ui, UiAction};
 
-/// Target frame time (~60 FPS)
-const FRAME_TIME_NS: u64 = 1_000_000_000 / 60;
+/// Target frame time - Game Boy native rate (59.7275 FPS)
+/// CPU: 4,194,304 Hz / 70,224 cycles per frame = 59.7275 FPS
+const FRAME_TIME_NS: u64 = 16_742_706; // ~59.7275 FPS
 
 /// UI window dimensions
 const UI_WIDTH: usize = 640;
