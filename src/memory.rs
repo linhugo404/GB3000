@@ -103,6 +103,10 @@ pub struct Memory {
     banking_mode: u8,
     /// Number of ROM banks (for masking)
     rom_bank_count: u16,
+    /// Number of RAM banks
+    ram_bank_count: u8,
+    /// MBC1 multicart mode (different banking for multicarts)
+    mbc1_multicart: bool,
     /// Joypad state (directly accessible for input handling)
     pub joypad_state: u8,
     /// DMA transfer in progress
@@ -144,6 +148,8 @@ impl Memory {
             mbc_type: MbcType::None,
             banking_mode: 0,
             rom_bank_count: 2, // Default 32KB = 2 banks
+            ram_bank_count: 0,
+            mbc1_multicart: false,
             joypad_state: 0xFF, // All buttons released
             dma_active: false,
             dma_source: 0,
@@ -208,45 +214,105 @@ impl Memory {
         
         // Determine RAM size from header (0x0149)
         if rom.len() > 0x0149 {
-            let ram_size = match rom[0x0149] {
-                0x00 => 0,
-                0x01 => 0x800,    // 2KB
-                0x02 => 0x2000,   // 8KB
-                0x03 => 0x8000,   // 32KB
-                0x04 => 0x20000,  // 128KB
-                0x05 => 0x10000,  // 64KB
-                _ => 0x8000,
+            let (ram_size, ram_banks) = match rom[0x0149] {
+                0x00 => (0, 0),
+                0x01 => (0x800, 1),     // 2KB
+                0x02 => (0x2000, 1),    // 8KB
+                0x03 => (0x8000, 4),    // 32KB = 4 banks
+                0x04 => (0x20000, 16),  // 128KB = 16 banks
+                0x05 => (0x10000, 8),   // 64KB = 8 banks
+                _ => (0x8000, 4),
             };
+            self.ram_bank_count = ram_banks;
             if ram_size > 0 {
                 self.eram = vec![0; ram_size];
             }
+        }
+        
+        // Detect MBC1 multicart mode
+        // MBC1M uses a different banking scheme for multicart ROMs
+        // Typically 8Mb (1MB) ROMs that contain multiple games
+        if self.mbc_type == MbcType::Mbc1 && self.rom_bank_count >= 64 {
+            // Check for multicart signature: multiple Nintendo logos at bank boundaries
+            // A multicart has separate games at 0x00000, 0x40000, 0x80000, 0xC0000
+            let mut logo_count = 0;
+            for bank_start in [0x00000usize, 0x40000, 0x80000, 0xC0000] {
+                if bank_start + 0x134 < rom.len() {
+                    // Check for Nintendo logo at 0x104-0x133
+                    let logo_addr = bank_start + 0x104;
+                    if rom.len() > logo_addr + 0x30 {
+                        // Simple check: logo starts with specific bytes
+                        if rom[logo_addr] == 0xCE && rom[logo_addr + 1] == 0xED {
+                            logo_count += 1;
+                        }
+                    }
+                }
+            }
+            // If we found multiple logos, it's a multicart
+            self.mbc1_multicart = logo_count >= 2;
         }
     }
     
     /// Get effective MBC1 ROM bank for 0x4000-0x7FFF region
     fn mbc1_rom_bank(&self) -> usize {
-        let bank = if self.banking_mode == 0 {
-            // Mode 0: 5-bit bank + 2-bit upper
-            ((self.rom_bank_high as usize) << 5) | (self.rom_bank_low as usize)
+        if self.mbc1_multicart {
+            // MBC1M multicart mode: upper 2 bits select game, lower 4 bits select bank within game
+            let game = (self.rom_bank_high as usize) << 4;
+            // Only lower 4 bits used for bank within game
+            let raw_bank = self.rom_bank_low as usize & 0x0F;
+            // Bank 0 within a game maps to bank 1
+            let bank_in_game = if raw_bank == 0 { 1 } else { raw_bank };
+            let bank = game | bank_in_game;
+            bank % (self.rom_bank_count as usize)
         } else {
-            // Mode 1: Only 5-bit bank
-            self.rom_bank_low as usize
-        };
-        
-        // MBC1 cannot access bank 0 in 0x4000 region, maps to bank 1
-        let bank = if bank == 0 { 1 } else { bank };
-        
-        // Mask to actual ROM size
-        bank % (self.rom_bank_count as usize)
+            // Standard MBC1
+            // The 5-bit register cannot be 0; if it is, it's treated as 1
+            // This means banks 0x00, 0x20, 0x40, 0x60 cannot be accessed,
+            // they map to 0x01, 0x21, 0x41, 0x61 respectively
+            let low_bits = if self.rom_bank_low == 0 { 1 } else { self.rom_bank_low as usize };
+            
+            let bank = if self.banking_mode == 0 {
+                // Mode 0: 5-bit bank + 2-bit upper for full 7-bit address
+                ((self.rom_bank_high as usize) << 5) | low_bits
+            } else {
+                // Mode 1: Upper bits affect 0x0000 region, 0x4000 uses full address
+                ((self.rom_bank_high as usize) << 5) | low_bits
+            };
+            
+            // Mask to actual ROM size
+            bank % (self.rom_bank_count as usize)
+        }
     }
     
     /// Get effective MBC1 ROM bank for 0x0000-0x3FFF region (mode 1 only)
     fn mbc1_rom_bank_0(&self) -> usize {
-        if self.banking_mode == 1 {
-            // Mode 1: Upper 2 bits select 0x4000 bank for lower region
-            let bank = (self.rom_bank_high as usize) << 5;
-            bank % (self.rom_bank_count as usize)
+        if self.mbc1_multicart {
+            // MBC1M multicart: upper 2 bits select game's bank 0
+            if self.banking_mode == 1 {
+                let game = (self.rom_bank_high as usize) << 4;
+                game % (self.rom_bank_count as usize)
+            } else {
+                0
+            }
         } else {
+            // Standard MBC1
+            if self.banking_mode == 1 {
+                // Mode 1: Upper 2 bits select 0x4000 bank for lower region
+                let bank = (self.rom_bank_high as usize) << 5;
+                bank % (self.rom_bank_count as usize)
+            } else {
+                0
+            }
+        }
+    }
+    
+    /// Get effective MBC1 RAM bank
+    fn mbc1_ram_bank(&self) -> usize {
+        if self.banking_mode == 1 {
+            // Mode 1: Use upper 2 bits for RAM bank (supports up to 4 banks)
+            (self.rom_bank_high as usize) % (self.ram_bank_count.max(1) as usize)
+        } else {
+            // Mode 0: Only bank 0 accessible
             0
         }
     }
@@ -285,15 +351,7 @@ impl Memory {
             0xA000..=0xBFFF => {
                 if self.ram_enabled {
                     let bank = match self.mbc_type {
-                        MbcType::Mbc1 => {
-                            if self.banking_mode == 1 {
-                                // Mode 1: Use upper 2 bits for RAM bank
-                                self.rom_bank_high as usize
-                            } else {
-                                // Mode 0: Only bank 0 accessible
-                                0
-                            }
-                        }
+                        MbcType::Mbc1 => self.mbc1_ram_bank(),
                         _ => self.ram_bank as usize,
                     };
                     let offset = (bank * 0x2000) + ((addr as usize) - 0xA000);
@@ -343,11 +401,8 @@ impl Memory {
                 // ROM bank select
                 match self.mbc_type {
                     MbcType::Mbc1 => {
-                        // MBC1: 5-bit bank register, 0 maps to 1
+                        // MBC1: 5-bit bank register (0→1 handled in mbc1_rom_bank)
                         self.rom_bank_low = value & 0x1F;
-                        if self.rom_bank_low == 0 {
-                            self.rom_bank_low = 1;
-                        }
                     }
                     MbcType::Mbc2 => {
                         if addr & 0x0100 != 0 {
@@ -406,13 +461,7 @@ impl Memory {
             0xA000..=0xBFFF => {
                 if self.ram_enabled {
                     let bank = match self.mbc_type {
-                        MbcType::Mbc1 => {
-                            if self.banking_mode == 1 {
-                                self.rom_bank_high as usize
-                            } else {
-                                0
-                            }
-                        }
+                        MbcType::Mbc1 => self.mbc1_ram_bank(),
                         _ => self.ram_bank as usize,
                     };
                     let offset = (bank * 0x2000) + ((addr as usize) - 0xA000);
