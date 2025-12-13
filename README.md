@@ -17,8 +17,8 @@ code as simple and approachable as possible.
 
 ## Screenshots
 
-The emulator renders the classic Game Boy screen at 160x144 resolution with the
-iconic green palette.
+The emulator renders the Game Boy screen at 160x144 resolution (scaled 4x) with
+a grayscale palette for clear visibility.
 
 ## Building
 
@@ -64,7 +64,7 @@ The emulator is organized into several modules:
 
 ## Compatibility
 
-The emulator passes basic test ROMs and can run many commercial games. However,
+The emulator can run commercial games including Pokemon Yellow. However,
 some features may not be perfectly accurate:
 
 - Cycle-exact PPU timing (simplified for now)
