@@ -51,6 +51,25 @@ cargo run --release -- path/to/rom.gb
 cargo test
 ```
 
+### Automated Test ROM Suite
+
+Run the test runner against Blargg and Mooneye test ROMs:
+
+```sh
+cargo run --release -- --test test_roms/blargg/cpu_instrs/individual
+cargo run --release -- --test test_roms/mooneye-test-suite/acceptance
+```
+
+### Test Results
+
+| Test Suite | Pass Rate |
+|------------|-----------|
+| Blargg CPU Instructions | 11/11 ✓ |
+| Blargg Instruction Timing | 1/1 ✓ |
+| Mooneye MBC1 | 9/13 |
+| Mooneye Timer | 11/13 |
+| Mooneye Acceptance | 8/41 |
+
 ## Architecture
 
 The emulator is organized into several modules:
