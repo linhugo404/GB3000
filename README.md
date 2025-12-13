@@ -62,13 +62,19 @@ cargo run --release -- --test test_roms/mooneye-test-suite/acceptance
 
 ### Test Results
 
-| Test Suite | Pass Rate |
-|------------|-----------|
-| Blargg CPU Instructions | 11/11 ✓ |
-| Blargg Instruction Timing | 1/1 ✓ |
-| Mooneye MBC1 | 9/13 |
-| Mooneye Timer | 11/13 |
-| Mooneye Acceptance | 8/41 |
+| Test Suite | Pass Rate | Notes |
+|------------|-----------|-------|
+| Blargg CPU Instructions | **11/11** ✓ | All CPU opcodes correct |
+| Blargg Instruction Timing | **1/1** ✓ | Instruction timing accurate |
+| Mooneye MBC1 | 9/13 | Core banking works, edge cases pending |
+| Mooneye Timer | 11/13 | Accurate falling-edge detection |
+| Mooneye OAM DMA | 2/3 | Basic DMA working |
+| Mooneye Acceptance | 8/41 | Interrupt/timing tests passing |
+
+The remaining failures are primarily:
+- Sub-instruction cycle timing (memory access timing within instructions)
+- PPU mode transition timing (precise scanline timing)
+- Rare edge cases in MBC1 (multicart, large ROMs)
 
 ## Architecture
 
