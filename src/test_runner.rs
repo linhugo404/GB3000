@@ -1,8 +1,8 @@
-/// Automated test runner for Blargg's test ROMs
+/// Automated test runner for Game Boy test ROMs
 ///
-/// Blargg tests output results via:
-/// 1. Serial port (0xFF01/0xFF02) - prints "Passed" or "Failed"
-/// 2. Memory at 0xA000+ contains result status
+/// Supports multiple test ROM formats:
+/// 1. Blargg tests - output via serial port, "Passed"/"Failed" in output
+/// 2. Mooneye tests - execute LD B,B when done, Fibonacci registers on success
 
 use crate::cpu::Cpu;
 use crate::memory::Memory;
@@ -11,6 +11,14 @@ use crate::timer::Timer;
 
 /// Maximum cycles to run a test before timing out
 const MAX_CYCLES: u64 = 500_000_000; // ~120 seconds of emulated time
+
+/// Mooneye Fibonacci success signature
+const MOONEYE_B: u8 = 3;
+const MOONEYE_C: u8 = 5;
+const MOONEYE_D: u8 = 8;
+const MOONEYE_E: u8 = 13;
+const MOONEYE_H: u8 = 21;
+const MOONEYE_L: u8 = 34;
 
 /// Result of running a test
 #[derive(Debug)]
@@ -55,6 +63,9 @@ pub fn run_test(rom_path: &str) -> TestResult {
     // Serial output buffer
     let mut serial_output = String::new();
     let mut total_cycles: u64 = 0;
+    
+    // Track previous PC for Mooneye LD B,B detection
+    let mut prev_pc: u16 = 0;
 
     // Run the test
     loop {
@@ -71,6 +82,9 @@ pub fn run_test(rom_path: &str) -> TestResult {
 
         // Handle interrupts
         handle_interrupts(&mut cpu, &mut memory);
+
+        // Save PC before execution
+        prev_pc = cpu.pc;
 
         // Execute one instruction
         let cycles = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -96,6 +110,41 @@ pub fn run_test(rom_path: &str) -> TestResult {
         };
 
         total_cycles += cycles as u64;
+
+        // Check for Mooneye test completion (LD B, B = 0x40 in an infinite loop)
+        // Mooneye tests end with: LD B, B followed by JR -2 (infinite loop)
+        // So we check if the current instruction is LD B,B and the next is JR -2
+        let executed_opcode = memory.read_byte(prev_pc);
+        if executed_opcode == 0x40 {
+            // Check if followed by JR -2 (0x18 0xFE) which is the Mooneye termination pattern
+            let next_opcode = memory.read_byte(prev_pc.wrapping_add(1));
+            let jr_offset = memory.read_byte(prev_pc.wrapping_add(2));
+            
+            if next_opcode == 0x18 && jr_offset == 0xFE {
+                // This is the Mooneye termination pattern
+                let is_fibonacci = cpu.b == MOONEYE_B
+                    && cpu.c == MOONEYE_C
+                    && cpu.d == MOONEYE_D
+                    && cpu.e == MOONEYE_E
+                    && cpu.h == MOONEYE_H
+                    && cpu.l == MOONEYE_L;
+                
+                return TestResult {
+                    name,
+                    passed: is_fibonacci,
+                    output: serial_output,
+                    cycles: total_cycles,
+                    error: if !is_fibonacci {
+                        Some(format!(
+                            "Mooneye: B={} C={} D={} E={} H={} L={}",
+                            cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l
+                        ))
+                    } else {
+                        None
+                    },
+                };
+            }
+        }
 
         // Update timer
         timer.tick(&mut memory, cycles);

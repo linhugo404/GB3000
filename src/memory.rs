@@ -87,7 +87,11 @@ pub struct Memory {
     rom: Vec<u8>,
     /// External RAM
     eram: Vec<u8>,
-    /// Current ROM bank (for MBC)
+    /// Current ROM bank lower 5 bits (for MBC1)
+    rom_bank_low: u8,
+    /// Current ROM bank upper 2 bits / RAM bank (for MBC1)
+    rom_bank_high: u8,
+    /// Current ROM bank (for MBC3/5)
     rom_bank: u16,
     /// Current RAM bank (for MBC)
     ram_bank: u8,
@@ -97,12 +101,20 @@ pub struct Memory {
     mbc_type: MbcType,
     /// Banking mode (for MBC1)
     banking_mode: u8,
+    /// Number of ROM banks (for masking)
+    rom_bank_count: u16,
     /// Joypad state (directly accessible for input handling)
     pub joypad_state: u8,
     /// DMA transfer in progress
     dma_active: bool,
     dma_source: u16,
     dma_offset: u8,
+    /// Timer register write flags (for timer to process)
+    pub timer_div_written: bool,
+    pub timer_tac_written: bool,
+    pub timer_tac_old_value: u8,
+    pub timer_tima_written: bool,
+    pub timer_tima_new_value: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -121,15 +133,23 @@ impl Memory {
             data: [0; 0x10000],
             rom: Vec::new(),
             eram: vec![0; 0x8000], // 32KB max external RAM
+            rom_bank_low: 1,
+            rom_bank_high: 0,
             rom_bank: 1,
             ram_bank: 0,
             ram_enabled: false,
             mbc_type: MbcType::None,
             banking_mode: 0,
+            rom_bank_count: 2, // Default 32KB = 2 banks
             joypad_state: 0xFF, // All buttons released
             dma_active: false,
             dma_source: 0,
             dma_offset: 0,
+            timer_div_written: false,
+            timer_tac_written: false,
+            timer_tac_old_value: 0,
+            timer_tima_written: false,
+            timer_tima_new_value: 0,
         };
         // Initialize some registers to their power-on values
         mem.data[io::LCDC as usize] = 0x91;
@@ -160,6 +180,27 @@ impl Memory {
             };
         }
         
+        // Calculate number of ROM banks from header (0x0148)
+        if rom.len() > 0x0148 {
+            self.rom_bank_count = match rom[0x0148] {
+                0x00 => 2,    // 32KB = 2 banks
+                0x01 => 4,    // 64KB = 4 banks
+                0x02 => 8,    // 128KB = 8 banks
+                0x03 => 16,   // 256KB = 16 banks
+                0x04 => 32,   // 512KB = 32 banks
+                0x05 => 64,   // 1MB = 64 banks
+                0x06 => 128,  // 2MB = 128 banks
+                0x07 => 256,  // 4MB = 256 banks
+                0x08 => 512,  // 8MB = 512 banks
+                0x52 => 72,   // 1.1MB
+                0x53 => 80,   // 1.2MB
+                0x54 => 96,   // 1.5MB
+                _ => (rom.len() / 0x4000) as u16,
+            };
+        } else {
+            self.rom_bank_count = (rom.len() / 0x4000).max(2) as u16;
+        }
+        
         // Determine RAM size from header (0x0149)
         if rom.len() > 0x0149 {
             let ram_size = match rom[0x0149] {
@@ -176,24 +217,61 @@ impl Memory {
             }
         }
     }
+    
+    /// Get effective MBC1 ROM bank for 0x4000-0x7FFF region
+    fn mbc1_rom_bank(&self) -> usize {
+        let bank = if self.banking_mode == 0 {
+            // Mode 0: 5-bit bank + 2-bit upper
+            ((self.rom_bank_high as usize) << 5) | (self.rom_bank_low as usize)
+        } else {
+            // Mode 1: Only 5-bit bank
+            self.rom_bank_low as usize
+        };
+        
+        // MBC1 cannot access bank 0 in 0x4000 region, maps to bank 1
+        let bank = if bank == 0 { 1 } else { bank };
+        
+        // Mask to actual ROM size
+        bank % (self.rom_bank_count as usize)
+    }
+    
+    /// Get effective MBC1 ROM bank for 0x0000-0x3FFF region (mode 1 only)
+    fn mbc1_rom_bank_0(&self) -> usize {
+        if self.banking_mode == 1 {
+            // Mode 1: Upper 2 bits select 0x4000 bank for lower region
+            let bank = (self.rom_bank_high as usize) << 5;
+            bank % (self.rom_bank_count as usize)
+        } else {
+            0
+        }
+    }
 
     /// Reads a byte from the given address.
     pub fn read_byte(&self, addr: u16) -> u8 {
         match addr {
             // ROM Bank 0
             0x0000..=0x3FFF => {
-                if self.mbc_type == MbcType::Mbc1 && self.banking_mode == 1 {
-                    let bank = (self.ram_bank as usize) << 5;
-                    let offset = (bank * 0x4000) + (addr as usize);
-                    self.rom.get(offset).copied().unwrap_or(0xFF)
-                } else {
-                    self.rom.get(addr as usize).copied().unwrap_or(0xFF)
-                }
+                let bank = match self.mbc_type {
+                    MbcType::Mbc1 => self.mbc1_rom_bank_0(),
+                    _ => 0,
+                };
+                let offset = (bank * 0x4000) + (addr as usize);
+                self.rom.get(offset).copied().unwrap_or(0xFF)
             }
             
             // ROM Bank 1-N (switchable)
             0x4000..=0x7FFF => {
-                let bank = self.rom_bank as usize;
+                let bank = match self.mbc_type {
+                    MbcType::None => 1,
+                    MbcType::Mbc1 => self.mbc1_rom_bank(),
+                    MbcType::Mbc2 => {
+                        let b = self.rom_bank as usize;
+                        if b == 0 { 1 } else { b % (self.rom_bank_count as usize) }
+                    }
+                    MbcType::Mbc3 | MbcType::Mbc5 => {
+                        (self.rom_bank as usize) % (self.rom_bank_count as usize)
+                    }
+                };
                 let offset = (bank * 0x4000) + ((addr as usize) - 0x4000);
                 self.rom.get(offset).copied().unwrap_or(0xFF)
             }
@@ -201,7 +279,18 @@ impl Memory {
             // External RAM
             0xA000..=0xBFFF => {
                 if self.ram_enabled {
-                    let bank = self.ram_bank as usize;
+                    let bank = match self.mbc_type {
+                        MbcType::Mbc1 => {
+                            if self.banking_mode == 1 {
+                                // Mode 1: Use upper 2 bits for RAM bank
+                                self.rom_bank_high as usize
+                            } else {
+                                // Mode 0: Only bank 0 accessible
+                                0
+                            }
+                        }
+                        _ => self.ram_bank as usize,
+                    };
                     let offset = (bank * 0x2000) + ((addr as usize) - 0xA000);
                     self.eram.get(offset).copied().unwrap_or(0xFF)
                 } else {
@@ -246,10 +335,10 @@ impl Memory {
                 // ROM bank select
                 match self.mbc_type {
                     MbcType::Mbc1 => {
-                        let bank = value & 0x1F;
-                        self.rom_bank = (self.rom_bank & 0x60) | (bank as u16);
-                        if self.rom_bank == 0 {
-                            self.rom_bank = 1;
+                        // MBC1: 5-bit bank register, 0 maps to 1
+                        self.rom_bank_low = value & 0x1F;
+                        if self.rom_bank_low == 0 {
+                            self.rom_bank_low = 1;
                         }
                     }
                     MbcType::Mbc2 => {
@@ -279,10 +368,9 @@ impl Memory {
                 // RAM bank select (or upper bits of ROM bank for MBC1)
                 match self.mbc_type {
                     MbcType::Mbc1 => {
+                        // MBC1: 2-bit register, affects ROM or RAM based on mode
+                        self.rom_bank_high = value & 0x03;
                         self.ram_bank = value & 0x03;
-                        if self.banking_mode == 0 {
-                            self.rom_bank = (self.rom_bank & 0x1F) | (((value & 0x03) as u16) << 5);
-                        }
                     }
                     MbcType::Mbc3 => {
                         self.ram_bank = value & 0x0F;
@@ -309,7 +397,16 @@ impl Memory {
             // External RAM
             0xA000..=0xBFFF => {
                 if self.ram_enabled {
-                    let bank = self.ram_bank as usize;
+                    let bank = match self.mbc_type {
+                        MbcType::Mbc1 => {
+                            if self.banking_mode == 1 {
+                                self.rom_bank_high as usize
+                            } else {
+                                0
+                            }
+                        }
+                        _ => self.ram_bank as usize,
+                    };
                     let offset = (bank * 0x2000) + ((addr as usize) - 0xA000);
                     if offset < self.eram.len() {
                         self.eram[offset] = value;
@@ -380,7 +477,23 @@ impl Memory {
             
             io::DIV => {
                 // Writing any value resets DIV to 0
+                // Timer will handle the edge detection
+                self.timer_div_written = true;
                 self.data[addr as usize] = 0;
+            }
+            
+            io::TAC => {
+                // Timer control - notify timer of change
+                self.timer_tac_written = true;
+                self.timer_tac_old_value = self.data[addr as usize];
+                self.data[addr as usize] = value;
+            }
+            
+            io::TIMA => {
+                // Timer counter - writing during overflow window cancels reload
+                self.timer_tima_written = true;
+                self.timer_tima_new_value = value;
+                self.data[addr as usize] = value;
             }
             
             io::DMA => {
