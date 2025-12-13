@@ -70,13 +70,19 @@ cargo run --release -- --test test_roms/mooneye-test-suite/acceptance
 | Blargg DMG Sound | **12/12** ✓ | All APU register tests pass |
 | Mooneye MBC1 | **12/13** | 64KB RAM, 8MB/16MB ROM support |
 | Mooneye Timer | **11/13** | Accurate falling-edge detection |
-| Mooneye Acceptance | **18/41** | Multi-model support |
+| Mooneye Acceptance | **19/41** | Multi-model + boot state |
 
-**Passing Acceptance Tests (18):**
+**Passing Acceptance Tests (19):**
 - Boot registers (DMG-ABC, DMG-0, MGB, SGB, SGB2)
+- Boot DIV timing (DMG-ABC/MGB)
 - Interrupt timing (di_timing, ei_timing, ei_sequence, intr_timing)
 - HALT behavior (halt_ime0_*, halt_ime1_*)
-- RETI timing, div_timing, if_ie_registers, pop_timing
+- RETI timing, div_timing, if_ie_registers, pop_timing, rapid_di_ei
+
+**Remaining Failures (22):**
+- Boot tests (6): Require exact boot ROM state emulation
+- Instruction timing (13): PUSH/CALL/RET/JP/RST sub-cycle accuracy
+- OAM DMA (3): Complex DMA timing edge cases
 
 **Hardware Model Support:**
 The emulator automatically detects and emulates different Game Boy models:
