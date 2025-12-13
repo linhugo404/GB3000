@@ -84,36 +84,51 @@ pub fn run_test(rom_path: &str) -> TestResult {
         let intr_cycles = handle_interrupts(&mut cpu, &mut memory);
         if intr_cycles > 0 {
             total_cycles += intr_cycles as u64;
-            timer.tick(&mut memory, intr_cycles);
-            ppu.tick(&mut memory, intr_cycles);
-            for _ in 0..intr_cycles {
-                memory.tick_dma();
+            // Tick components during interrupt dispatch in 4-cycle chunks
+            for _ in 0..(intr_cycles / 4) {
+                timer.tick(&mut memory, 4);
+                ppu.tick(&mut memory, 4);
+                for _ in 0..4 {
+                    memory.tick_dma();
+                }
             }
         }
 
         // Save PC before execution
         prev_pc = cpu.pc;
 
-        // Execute one instruction
-        let cycles = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            cpu.step(&mut memory)
-        })) {
-            Ok(c) => c,
-            Err(e) => {
-                let msg = if let Some(s) = e.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = e.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "Unknown panic".to_string()
-                };
-                return TestResult {
-                    name,
-                    passed: false,
-                    output: serial_output,
-                    cycles: total_cycles,
-                    error: Some(format!("CPU panic: {}", msg)),
-                };
+        // Execute one instruction with M-cycle accurate timing
+        // The closure is called after each M-cycle (4 T-cycles)
+        let cycles = {
+            let timer_ref = &mut timer;
+            let ppu_ref = &mut ppu;
+            
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cpu.step_mcycle(&mut memory, |mem, tcycles| {
+                    timer_ref.tick(mem, tcycles);
+                    ppu_ref.tick(mem, tcycles);
+                    for _ in 0..tcycles {
+                        mem.tick_dma();
+                    }
+                })
+            })) {
+                Ok(c) => c,
+                Err(e) => {
+                    let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = e.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "Unknown panic".to_string()
+                    };
+                    return TestResult {
+                        name,
+                        passed: false,
+                        output: serial_output,
+                        cycles: total_cycles,
+                        error: Some(format!("CPU panic: {}", msg)),
+                    };
+                }
             }
         };
 
@@ -154,16 +169,7 @@ pub fn run_test(rom_path: &str) -> TestResult {
             }
         }
 
-        // Update timer
-        timer.tick(&mut memory, cycles);
-
-        // Update PPU (simplified - we don't need full rendering for tests)
-        ppu.tick(&mut memory, cycles);
-        
-        // Update DMA (once per cycle)
-        for _ in 0..cycles {
-            memory.tick_dma();
-        }
+        // Timer, PPU, and DMA are now ticked inside step_mcycle for M-cycle accuracy
 
         // Check serial output
         // When SC (0xFF02) has bit 7 set and bit 0 set, a byte is being sent

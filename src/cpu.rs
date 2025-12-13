@@ -3,7 +3,7 @@
 /// This implements the Sharp LR35902 processor with all opcodes,
 /// proper flag handling, and interrupt support.
 /// 
-/// This version is cycle-accurate, executing one M-cycle at a time.
+/// This version supports M-cycle accurate execution for precise timing.
 
 use crate::memory::Memory;
 
@@ -12,15 +12,6 @@ const FLAG_Z: u8 = 0b1000_0000; // Zero flag
 const FLAG_N: u8 = 0b0100_0000; // Subtract flag
 const FLAG_H: u8 = 0b0010_0000; // Half-carry flag
 const FLAG_C: u8 = 0b0001_0000; // Carry flag
-
-/// CPU execution state for cycle-accurate emulation
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum CpuState {
-    /// Ready to fetch next opcode
-    Fetch,
-    /// Executing an instruction (remaining M-cycles)
-    Execute(u8),
-}
 
 #[derive(Debug)]
 pub struct Cpu {
@@ -1479,6 +1470,1384 @@ impl Cpu {
                 set_reg(self, memory, reg_idx, result);
                 base_cycles
             }
+        }
+    }
+
+    /// Executes a single CPU step with M-cycle accurate timing.
+    /// The callback is called after each M-cycle (4 T-cycles) allowing
+    /// other components to be updated between memory accesses.
+    /// Returns the total number of T-cycles consumed.
+    pub fn step_mcycle<F>(&mut self, memory: &mut Memory, mut tick: F) -> u32
+    where
+        F: FnMut(&mut Memory, u32),
+    {
+        // Handle pending IME enable (EI has a one-instruction delay)
+        if self.ime_pending {
+            self.ime = true;
+            self.ime_pending = false;
+        }
+
+        // If halted, tick for one M-cycle and return
+        if self.halted {
+            tick(memory, 4);
+            return 4;
+        }
+
+        // Fetch opcode (1 M-cycle)
+        let opcode = self.fetch_byte(memory);
+        tick(memory, 4);
+
+        // Execute the instruction with M-cycle ticking
+        self.execute_mcycle(opcode, memory, &mut tick)
+    }
+
+    /// Execute an instruction with M-cycle accurate timing
+    fn execute_mcycle<F>(&mut self, opcode: u8, memory: &mut Memory, tick: &mut F) -> u32
+    where
+        F: FnMut(&mut Memory, u32),
+    {
+        match opcode {
+            // NOP - no additional M-cycles
+            0x00 => 4,
+
+            // LD BC, d16 - 2 more M-cycles for operand fetch
+            0x01 => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.set_bc(((hi as u16) << 8) | (lo as u16));
+                12
+            }
+
+            // LD (BC), A - 1 more M-cycle for write
+            0x02 => {
+                self.write_byte(memory, self.bc(), self.a);
+                tick(memory, 4);
+                8
+            }
+
+            // INC BC - 1 internal M-cycle
+            0x03 => {
+                self.set_bc(self.bc().wrapping_add(1));
+                tick(memory, 4);
+                8
+            }
+
+            // INC B - no additional M-cycles
+            0x04 => { self.b = self.alu_inc(self.b); 4 }
+
+            // DEC B - no additional M-cycles
+            0x05 => { self.b = self.alu_dec(self.b); 4 }
+
+            // LD B, d8 - 1 more M-cycle for operand
+            0x06 => {
+                self.b = self.fetch_byte(memory);
+                tick(memory, 4);
+                8
+            }
+
+            // RLCA - no additional M-cycles
+            0x07 => {
+                let carry = self.a >> 7;
+                self.a = (self.a << 1) | carry;
+                self.set_flags(false, false, false, carry != 0);
+                4
+            }
+
+            // LD (a16), SP - 4 more M-cycles
+            0x08 => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                memory.write_byte(addr, self.sp as u8);
+                tick(memory, 4);
+                memory.write_byte(addr.wrapping_add(1), (self.sp >> 8) as u8);
+                tick(memory, 4);
+                20
+            }
+
+            // ADD HL, BC - 1 internal M-cycle
+            0x09 => {
+                self.alu_add_hl(self.bc());
+                tick(memory, 4);
+                8
+            }
+
+            // LD A, (BC) - 1 more M-cycle for read
+            0x0A => {
+                self.a = self.read_byte(memory, self.bc());
+                tick(memory, 4);
+                8
+            }
+
+            // DEC BC - 1 internal M-cycle
+            0x0B => {
+                self.set_bc(self.bc().wrapping_sub(1));
+                tick(memory, 4);
+                8
+            }
+
+            // INC C - no additional M-cycles
+            0x0C => { self.c = self.alu_inc(self.c); 4 }
+
+            // DEC C - no additional M-cycles
+            0x0D => { self.c = self.alu_dec(self.c); 4 }
+
+            // LD C, d8 - 1 more M-cycle
+            0x0E => {
+                self.c = self.fetch_byte(memory);
+                tick(memory, 4);
+                8
+            }
+
+            // RRCA - no additional M-cycles
+            0x0F => {
+                let carry = self.a & 1;
+                self.a = (self.a >> 1) | (carry << 7);
+                self.set_flags(false, false, false, carry != 0);
+                4
+            }
+
+            // STOP
+            0x10 => {
+                self.pc = self.pc.wrapping_add(1);
+                self.stopped = true;
+                4
+            }
+
+            // LD DE, d16
+            0x11 => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.set_de(((hi as u16) << 8) | (lo as u16));
+                12
+            }
+
+            // LD (DE), A
+            0x12 => {
+                self.write_byte(memory, self.de(), self.a);
+                tick(memory, 4);
+                8
+            }
+
+            // INC DE
+            0x13 => {
+                self.set_de(self.de().wrapping_add(1));
+                tick(memory, 4);
+                8
+            }
+
+            // INC D
+            0x14 => { self.d = self.alu_inc(self.d); 4 }
+
+            // DEC D
+            0x15 => { self.d = self.alu_dec(self.d); 4 }
+
+            // LD D, d8
+            0x16 => {
+                self.d = self.fetch_byte(memory);
+                tick(memory, 4);
+                8
+            }
+
+            // RLA
+            0x17 => {
+                let old_carry = if self.flag_c() { 1 } else { 0 };
+                let new_carry = self.a >> 7;
+                self.a = (self.a << 1) | old_carry;
+                self.set_flags(false, false, false, new_carry != 0);
+                4
+            }
+
+            // JR r8
+            0x18 => {
+                let offset = self.fetch_byte(memory) as i8;
+                tick(memory, 4);
+                self.pc = self.pc.wrapping_add(offset as u16);
+                tick(memory, 4);
+                12
+            }
+
+            // ADD HL, DE
+            0x19 => {
+                self.alu_add_hl(self.de());
+                tick(memory, 4);
+                8
+            }
+
+            // LD A, (DE)
+            0x1A => {
+                self.a = self.read_byte(memory, self.de());
+                tick(memory, 4);
+                8
+            }
+
+            // DEC DE
+            0x1B => {
+                self.set_de(self.de().wrapping_sub(1));
+                tick(memory, 4);
+                8
+            }
+
+            // INC E
+            0x1C => { self.e = self.alu_inc(self.e); 4 }
+
+            // DEC E
+            0x1D => { self.e = self.alu_dec(self.e); 4 }
+
+            // LD E, d8
+            0x1E => {
+                self.e = self.fetch_byte(memory);
+                tick(memory, 4);
+                8
+            }
+
+            // RRA
+            0x1F => {
+                let old_carry = if self.flag_c() { 1 } else { 0 };
+                let new_carry = self.a & 1;
+                self.a = (self.a >> 1) | (old_carry << 7);
+                self.set_flags(false, false, false, new_carry != 0);
+                4
+            }
+
+            // JR NZ, r8
+            0x20 => {
+                let offset = self.fetch_byte(memory) as i8;
+                tick(memory, 4);
+                if !self.flag_z() {
+                    self.pc = self.pc.wrapping_add(offset as u16);
+                    tick(memory, 4);
+                    12
+                } else {
+                    8
+                }
+            }
+
+            // LD HL, d16
+            0x21 => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.set_hl(((hi as u16) << 8) | (lo as u16));
+                12
+            }
+
+            // LD (HL+), A
+            0x22 => {
+                self.write_byte(memory, self.hl(), self.a);
+                tick(memory, 4);
+                self.set_hl(self.hl().wrapping_add(1));
+                8
+            }
+
+            // INC HL
+            0x23 => {
+                self.set_hl(self.hl().wrapping_add(1));
+                tick(memory, 4);
+                8
+            }
+
+            // INC H
+            0x24 => { self.h = self.alu_inc(self.h); 4 }
+
+            // DEC H
+            0x25 => { self.h = self.alu_dec(self.h); 4 }
+
+            // LD H, d8
+            0x26 => {
+                self.h = self.fetch_byte(memory);
+                tick(memory, 4);
+                8
+            }
+
+            // DAA
+            0x27 => { self.alu_daa(); 4 }
+
+            // JR Z, r8
+            0x28 => {
+                let offset = self.fetch_byte(memory) as i8;
+                tick(memory, 4);
+                if self.flag_z() {
+                    self.pc = self.pc.wrapping_add(offset as u16);
+                    tick(memory, 4);
+                    12
+                } else {
+                    8
+                }
+            }
+
+            // ADD HL, HL
+            0x29 => {
+                let hl = self.hl();
+                self.alu_add_hl(hl);
+                tick(memory, 4);
+                8
+            }
+
+            // LD A, (HL+)
+            0x2A => {
+                self.a = self.read_byte(memory, self.hl());
+                tick(memory, 4);
+                self.set_hl(self.hl().wrapping_add(1));
+                8
+            }
+
+            // DEC HL
+            0x2B => {
+                self.set_hl(self.hl().wrapping_sub(1));
+                tick(memory, 4);
+                8
+            }
+
+            // INC L
+            0x2C => { self.l = self.alu_inc(self.l); 4 }
+
+            // DEC L
+            0x2D => { self.l = self.alu_dec(self.l); 4 }
+
+            // LD L, d8
+            0x2E => {
+                self.l = self.fetch_byte(memory);
+                tick(memory, 4);
+                8
+            }
+
+            // CPL
+            0x2F => {
+                self.a = !self.a;
+                self.set_flag(FLAG_N, true);
+                self.set_flag(FLAG_H, true);
+                4
+            }
+
+            // JR NC, r8
+            0x30 => {
+                let offset = self.fetch_byte(memory) as i8;
+                tick(memory, 4);
+                if !self.flag_c() {
+                    self.pc = self.pc.wrapping_add(offset as u16);
+                    tick(memory, 4);
+                    12
+                } else {
+                    8
+                }
+            }
+
+            // LD SP, d16
+            0x31 => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.sp = ((hi as u16) << 8) | (lo as u16);
+                12
+            }
+
+            // LD (HL-), A
+            0x32 => {
+                self.write_byte(memory, self.hl(), self.a);
+                tick(memory, 4);
+                self.set_hl(self.hl().wrapping_sub(1));
+                8
+            }
+
+            // INC SP
+            0x33 => {
+                self.sp = self.sp.wrapping_add(1);
+                tick(memory, 4);
+                8
+            }
+
+            // INC (HL)
+            0x34 => {
+                let addr = self.hl();
+                let val = self.read_byte(memory, addr);
+                tick(memory, 4);
+                let result = self.alu_inc(val);
+                self.write_byte(memory, addr, result);
+                tick(memory, 4);
+                12
+            }
+
+            // DEC (HL)
+            0x35 => {
+                let addr = self.hl();
+                let val = self.read_byte(memory, addr);
+                tick(memory, 4);
+                let result = self.alu_dec(val);
+                self.write_byte(memory, addr, result);
+                tick(memory, 4);
+                12
+            }
+
+            // LD (HL), d8
+            0x36 => {
+                let val = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.write_byte(memory, self.hl(), val);
+                tick(memory, 4);
+                12
+            }
+
+            // SCF
+            0x37 => {
+                self.set_flag(FLAG_N, false);
+                self.set_flag(FLAG_H, false);
+                self.set_flag(FLAG_C, true);
+                4
+            }
+
+            // JR C, r8
+            0x38 => {
+                let offset = self.fetch_byte(memory) as i8;
+                tick(memory, 4);
+                if self.flag_c() {
+                    self.pc = self.pc.wrapping_add(offset as u16);
+                    tick(memory, 4);
+                    12
+                } else {
+                    8
+                }
+            }
+
+            // ADD HL, SP
+            0x39 => {
+                self.alu_add_hl(self.sp);
+                tick(memory, 4);
+                8
+            }
+
+            // LD A, (HL-)
+            0x3A => {
+                self.a = self.read_byte(memory, self.hl());
+                tick(memory, 4);
+                self.set_hl(self.hl().wrapping_sub(1));
+                8
+            }
+
+            // DEC SP
+            0x3B => {
+                self.sp = self.sp.wrapping_sub(1);
+                tick(memory, 4);
+                8
+            }
+
+            // INC A
+            0x3C => { self.a = self.alu_inc(self.a); 4 }
+
+            // DEC A
+            0x3D => { self.a = self.alu_dec(self.a); 4 }
+
+            // LD A, d8
+            0x3E => {
+                self.a = self.fetch_byte(memory);
+                tick(memory, 4);
+                8
+            }
+
+            // CCF
+            0x3F => {
+                self.set_flag(FLAG_N, false);
+                self.set_flag(FLAG_H, false);
+                self.set_flag(FLAG_C, !self.flag_c());
+                4
+            }
+
+            // LD r, r' (0x40-0x7F except 0x76)
+            0x40 => 4,
+            0x41 => { self.b = self.c; 4 }
+            0x42 => { self.b = self.d; 4 }
+            0x43 => { self.b = self.e; 4 }
+            0x44 => { self.b = self.h; 4 }
+            0x45 => { self.b = self.l; 4 }
+            0x46 => { self.b = self.read_byte(memory, self.hl()); tick(memory, 4); 8 }
+            0x47 => { self.b = self.a; 4 }
+            0x48 => { self.c = self.b; 4 }
+            0x49 => 4,
+            0x4A => { self.c = self.d; 4 }
+            0x4B => { self.c = self.e; 4 }
+            0x4C => { self.c = self.h; 4 }
+            0x4D => { self.c = self.l; 4 }
+            0x4E => { self.c = self.read_byte(memory, self.hl()); tick(memory, 4); 8 }
+            0x4F => { self.c = self.a; 4 }
+            0x50 => { self.d = self.b; 4 }
+            0x51 => { self.d = self.c; 4 }
+            0x52 => 4,
+            0x53 => { self.d = self.e; 4 }
+            0x54 => { self.d = self.h; 4 }
+            0x55 => { self.d = self.l; 4 }
+            0x56 => { self.d = self.read_byte(memory, self.hl()); tick(memory, 4); 8 }
+            0x57 => { self.d = self.a; 4 }
+            0x58 => { self.e = self.b; 4 }
+            0x59 => { self.e = self.c; 4 }
+            0x5A => { self.e = self.d; 4 }
+            0x5B => 4,
+            0x5C => { self.e = self.h; 4 }
+            0x5D => { self.e = self.l; 4 }
+            0x5E => { self.e = self.read_byte(memory, self.hl()); tick(memory, 4); 8 }
+            0x5F => { self.e = self.a; 4 }
+            0x60 => { self.h = self.b; 4 }
+            0x61 => { self.h = self.c; 4 }
+            0x62 => { self.h = self.d; 4 }
+            0x63 => { self.h = self.e; 4 }
+            0x64 => 4,
+            0x65 => { self.h = self.l; 4 }
+            0x66 => { self.h = self.read_byte(memory, self.hl()); tick(memory, 4); 8 }
+            0x67 => { self.h = self.a; 4 }
+            0x68 => { self.l = self.b; 4 }
+            0x69 => { self.l = self.c; 4 }
+            0x6A => { self.l = self.d; 4 }
+            0x6B => { self.l = self.e; 4 }
+            0x6C => { self.l = self.h; 4 }
+            0x6D => 4,
+            0x6E => { self.l = self.read_byte(memory, self.hl()); tick(memory, 4); 8 }
+            0x6F => { self.l = self.a; 4 }
+            0x70 => { self.write_byte(memory, self.hl(), self.b); tick(memory, 4); 8 }
+            0x71 => { self.write_byte(memory, self.hl(), self.c); tick(memory, 4); 8 }
+            0x72 => { self.write_byte(memory, self.hl(), self.d); tick(memory, 4); 8 }
+            0x73 => { self.write_byte(memory, self.hl(), self.e); tick(memory, 4); 8 }
+            0x74 => { self.write_byte(memory, self.hl(), self.h); tick(memory, 4); 8 }
+            0x75 => { self.write_byte(memory, self.hl(), self.l); tick(memory, 4); 8 }
+
+            // HALT
+            0x76 => {
+                let pending = memory.pending_interrupts();
+                if !self.ime && pending != 0 {
+                    self.halt_bug = true;
+                } else {
+                    self.halted = true;
+                }
+                4
+            }
+
+            0x77 => { self.write_byte(memory, self.hl(), self.a); tick(memory, 4); 8 }
+            0x78 => { self.a = self.b; 4 }
+            0x79 => { self.a = self.c; 4 }
+            0x7A => { self.a = self.d; 4 }
+            0x7B => { self.a = self.e; 4 }
+            0x7C => { self.a = self.h; 4 }
+            0x7D => { self.a = self.l; 4 }
+            0x7E => { self.a = self.read_byte(memory, self.hl()); tick(memory, 4); 8 }
+            0x7F => 4,
+
+            // ALU operations with registers
+            0x80 => { self.alu_add(self.b); 4 }
+            0x81 => { self.alu_add(self.c); 4 }
+            0x82 => { self.alu_add(self.d); 4 }
+            0x83 => { self.alu_add(self.e); 4 }
+            0x84 => { self.alu_add(self.h); 4 }
+            0x85 => { self.alu_add(self.l); 4 }
+            0x86 => { let v = self.read_byte(memory, self.hl()); tick(memory, 4); self.alu_add(v); 8 }
+            0x87 => { self.alu_add(self.a); 4 }
+            0x88 => { self.alu_adc(self.b); 4 }
+            0x89 => { self.alu_adc(self.c); 4 }
+            0x8A => { self.alu_adc(self.d); 4 }
+            0x8B => { self.alu_adc(self.e); 4 }
+            0x8C => { self.alu_adc(self.h); 4 }
+            0x8D => { self.alu_adc(self.l); 4 }
+            0x8E => { let v = self.read_byte(memory, self.hl()); tick(memory, 4); self.alu_adc(v); 8 }
+            0x8F => { self.alu_adc(self.a); 4 }
+            0x90 => { self.alu_sub(self.b); 4 }
+            0x91 => { self.alu_sub(self.c); 4 }
+            0x92 => { self.alu_sub(self.d); 4 }
+            0x93 => { self.alu_sub(self.e); 4 }
+            0x94 => { self.alu_sub(self.h); 4 }
+            0x95 => { self.alu_sub(self.l); 4 }
+            0x96 => { let v = self.read_byte(memory, self.hl()); tick(memory, 4); self.alu_sub(v); 8 }
+            0x97 => { self.alu_sub(self.a); 4 }
+            0x98 => { self.alu_sbc(self.b); 4 }
+            0x99 => { self.alu_sbc(self.c); 4 }
+            0x9A => { self.alu_sbc(self.d); 4 }
+            0x9B => { self.alu_sbc(self.e); 4 }
+            0x9C => { self.alu_sbc(self.h); 4 }
+            0x9D => { self.alu_sbc(self.l); 4 }
+            0x9E => { let v = self.read_byte(memory, self.hl()); tick(memory, 4); self.alu_sbc(v); 8 }
+            0x9F => { self.alu_sbc(self.a); 4 }
+            0xA0 => { self.alu_and(self.b); 4 }
+            0xA1 => { self.alu_and(self.c); 4 }
+            0xA2 => { self.alu_and(self.d); 4 }
+            0xA3 => { self.alu_and(self.e); 4 }
+            0xA4 => { self.alu_and(self.h); 4 }
+            0xA5 => { self.alu_and(self.l); 4 }
+            0xA6 => { let v = self.read_byte(memory, self.hl()); tick(memory, 4); self.alu_and(v); 8 }
+            0xA7 => { self.alu_and(self.a); 4 }
+            0xA8 => { self.alu_xor(self.b); 4 }
+            0xA9 => { self.alu_xor(self.c); 4 }
+            0xAA => { self.alu_xor(self.d); 4 }
+            0xAB => { self.alu_xor(self.e); 4 }
+            0xAC => { self.alu_xor(self.h); 4 }
+            0xAD => { self.alu_xor(self.l); 4 }
+            0xAE => { let v = self.read_byte(memory, self.hl()); tick(memory, 4); self.alu_xor(v); 8 }
+            0xAF => { self.alu_xor(self.a); 4 }
+            0xB0 => { self.alu_or(self.b); 4 }
+            0xB1 => { self.alu_or(self.c); 4 }
+            0xB2 => { self.alu_or(self.d); 4 }
+            0xB3 => { self.alu_or(self.e); 4 }
+            0xB4 => { self.alu_or(self.h); 4 }
+            0xB5 => { self.alu_or(self.l); 4 }
+            0xB6 => { let v = self.read_byte(memory, self.hl()); tick(memory, 4); self.alu_or(v); 8 }
+            0xB7 => { self.alu_or(self.a); 4 }
+            0xB8 => { self.alu_cp(self.b); 4 }
+            0xB9 => { self.alu_cp(self.c); 4 }
+            0xBA => { self.alu_cp(self.d); 4 }
+            0xBB => { self.alu_cp(self.e); 4 }
+            0xBC => { self.alu_cp(self.h); 4 }
+            0xBD => { self.alu_cp(self.l); 4 }
+            0xBE => { let v = self.read_byte(memory, self.hl()); tick(memory, 4); self.alu_cp(v); 8 }
+            0xBF => { self.alu_cp(self.a); 4 }
+
+            // RET NZ
+            0xC0 => {
+                tick(memory, 4); // Internal delay
+                if !self.flag_z() {
+                    let lo = memory.read_byte(self.sp) as u16;
+                    self.sp = self.sp.wrapping_add(1);
+                    tick(memory, 4);
+                    let hi = memory.read_byte(self.sp) as u16;
+                    self.sp = self.sp.wrapping_add(1);
+                    tick(memory, 4);
+                    self.pc = (hi << 8) | lo;
+                    tick(memory, 4);
+                    20
+                } else {
+                    8
+                }
+            }
+
+            // POP BC
+            0xC1 => {
+                let lo = memory.read_byte(self.sp) as u16;
+                self.sp = self.sp.wrapping_add(1);
+                tick(memory, 4);
+                let hi = memory.read_byte(self.sp) as u16;
+                self.sp = self.sp.wrapping_add(1);
+                tick(memory, 4);
+                self.set_bc((hi << 8) | lo);
+                12
+            }
+
+            // JP NZ, a16
+            0xC2 => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if !self.flag_z() {
+                    self.pc = addr;
+                    tick(memory, 4);
+                    16
+                } else {
+                    12
+                }
+            }
+
+            // JP a16
+            0xC3 => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.pc = ((hi as u16) << 8) | (lo as u16);
+                tick(memory, 4);
+                16
+            }
+
+            // CALL NZ, a16
+            0xC4 => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if !self.flag_z() {
+                    tick(memory, 4); // Internal
+                    self.sp = self.sp.wrapping_sub(1);
+                    memory.write_byte(self.sp, (self.pc >> 8) as u8);
+                    tick(memory, 4);
+                    self.sp = self.sp.wrapping_sub(1);
+                    memory.write_byte(self.sp, self.pc as u8);
+                    tick(memory, 4);
+                    self.pc = addr;
+                    24
+                } else {
+                    12
+                }
+            }
+
+            // PUSH BC
+            0xC5 => {
+                tick(memory, 4); // Internal
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.b);
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.c);
+                tick(memory, 4);
+                16
+            }
+
+            // ADD A, d8
+            0xC6 => {
+                let val = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.alu_add(val);
+                8
+            }
+
+            // RST 00H
+            0xC7 => {
+                tick(memory, 4); // Internal
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, (self.pc >> 8) as u8);
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.pc as u8);
+                tick(memory, 4);
+                self.pc = 0x0000;
+                16
+            }
+
+            // RET Z
+            0xC8 => {
+                tick(memory, 4); // Internal
+                if self.flag_z() {
+                    let lo = memory.read_byte(self.sp) as u16;
+                    self.sp = self.sp.wrapping_add(1);
+                    tick(memory, 4);
+                    let hi = memory.read_byte(self.sp) as u16;
+                    self.sp = self.sp.wrapping_add(1);
+                    tick(memory, 4);
+                    self.pc = (hi << 8) | lo;
+                    tick(memory, 4);
+                    20
+                } else {
+                    8
+                }
+            }
+
+            // RET
+            0xC9 => {
+                let lo = memory.read_byte(self.sp) as u16;
+                self.sp = self.sp.wrapping_add(1);
+                tick(memory, 4);
+                let hi = memory.read_byte(self.sp) as u16;
+                self.sp = self.sp.wrapping_add(1);
+                tick(memory, 4);
+                self.pc = (hi << 8) | lo;
+                tick(memory, 4);
+                16
+            }
+
+            // JP Z, a16
+            0xCA => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if self.flag_z() {
+                    self.pc = addr;
+                    tick(memory, 4);
+                    16
+                } else {
+                    12
+                }
+            }
+
+            // CB prefix
+            0xCB => self.execute_cb_mcycle(memory, tick),
+
+            // CALL Z, a16
+            0xCC => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if self.flag_z() {
+                    tick(memory, 4); // Internal
+                    self.sp = self.sp.wrapping_sub(1);
+                    memory.write_byte(self.sp, (self.pc >> 8) as u8);
+                    tick(memory, 4);
+                    self.sp = self.sp.wrapping_sub(1);
+                    memory.write_byte(self.sp, self.pc as u8);
+                    tick(memory, 4);
+                    self.pc = addr;
+                    24
+                } else {
+                    12
+                }
+            }
+
+            // CALL a16
+            0xCD => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                tick(memory, 4); // Internal
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, (self.pc >> 8) as u8);
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.pc as u8);
+                tick(memory, 4);
+                self.pc = addr;
+                24
+            }
+
+            // ADC A, d8
+            0xCE => {
+                let val = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.alu_adc(val);
+                8
+            }
+
+            // RST 08H
+            0xCF => {
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, (self.pc >> 8) as u8);
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.pc as u8);
+                tick(memory, 4);
+                self.pc = 0x0008;
+                16
+            }
+
+            // RET NC
+            0xD0 => {
+                tick(memory, 4);
+                if !self.flag_c() {
+                    let lo = memory.read_byte(self.sp) as u16;
+                    self.sp = self.sp.wrapping_add(1);
+                    tick(memory, 4);
+                    let hi = memory.read_byte(self.sp) as u16;
+                    self.sp = self.sp.wrapping_add(1);
+                    tick(memory, 4);
+                    self.pc = (hi << 8) | lo;
+                    tick(memory, 4);
+                    20
+                } else {
+                    8
+                }
+            }
+
+            // POP DE
+            0xD1 => {
+                let lo = memory.read_byte(self.sp) as u16;
+                self.sp = self.sp.wrapping_add(1);
+                tick(memory, 4);
+                let hi = memory.read_byte(self.sp) as u16;
+                self.sp = self.sp.wrapping_add(1);
+                tick(memory, 4);
+                self.set_de((hi << 8) | lo);
+                12
+            }
+
+            // JP NC, a16
+            0xD2 => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if !self.flag_c() {
+                    self.pc = addr;
+                    tick(memory, 4);
+                    16
+                } else {
+                    12
+                }
+            }
+
+            0xD3 => panic!("Illegal opcode 0xD3"),
+
+            // CALL NC, a16
+            0xD4 => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if !self.flag_c() {
+                    tick(memory, 4);
+                    self.sp = self.sp.wrapping_sub(1);
+                    memory.write_byte(self.sp, (self.pc >> 8) as u8);
+                    tick(memory, 4);
+                    self.sp = self.sp.wrapping_sub(1);
+                    memory.write_byte(self.sp, self.pc as u8);
+                    tick(memory, 4);
+                    self.pc = addr;
+                    24
+                } else {
+                    12
+                }
+            }
+
+            // PUSH DE
+            0xD5 => {
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.d);
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.e);
+                tick(memory, 4);
+                16
+            }
+
+            // SUB d8
+            0xD6 => {
+                let val = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.alu_sub(val);
+                8
+            }
+
+            // RST 10H
+            0xD7 => {
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, (self.pc >> 8) as u8);
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.pc as u8);
+                tick(memory, 4);
+                self.pc = 0x0010;
+                16
+            }
+
+            // RET C
+            0xD8 => {
+                tick(memory, 4);
+                if self.flag_c() {
+                    let lo = memory.read_byte(self.sp) as u16;
+                    self.sp = self.sp.wrapping_add(1);
+                    tick(memory, 4);
+                    let hi = memory.read_byte(self.sp) as u16;
+                    self.sp = self.sp.wrapping_add(1);
+                    tick(memory, 4);
+                    self.pc = (hi << 8) | lo;
+                    tick(memory, 4);
+                    20
+                } else {
+                    8
+                }
+            }
+
+            // RETI
+            0xD9 => {
+                let lo = memory.read_byte(self.sp) as u16;
+                self.sp = self.sp.wrapping_add(1);
+                tick(memory, 4);
+                let hi = memory.read_byte(self.sp) as u16;
+                self.sp = self.sp.wrapping_add(1);
+                tick(memory, 4);
+                self.pc = (hi << 8) | lo;
+                tick(memory, 4);
+                self.ime = true;
+                16
+            }
+
+            // JP C, a16
+            0xDA => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if self.flag_c() {
+                    self.pc = addr;
+                    tick(memory, 4);
+                    16
+                } else {
+                    12
+                }
+            }
+
+            0xDB => panic!("Illegal opcode 0xDB"),
+
+            // CALL C, a16
+            0xDC => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if self.flag_c() {
+                    tick(memory, 4);
+                    self.sp = self.sp.wrapping_sub(1);
+                    memory.write_byte(self.sp, (self.pc >> 8) as u8);
+                    tick(memory, 4);
+                    self.sp = self.sp.wrapping_sub(1);
+                    memory.write_byte(self.sp, self.pc as u8);
+                    tick(memory, 4);
+                    self.pc = addr;
+                    24
+                } else {
+                    12
+                }
+            }
+
+            0xDD => panic!("Illegal opcode 0xDD"),
+
+            // SBC A, d8
+            0xDE => {
+                let val = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.alu_sbc(val);
+                8
+            }
+
+            // RST 18H
+            0xDF => {
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, (self.pc >> 8) as u8);
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.pc as u8);
+                tick(memory, 4);
+                self.pc = 0x0018;
+                16
+            }
+
+            // LDH (a8), A
+            0xE0 => {
+                let offset = self.fetch_byte(memory) as u16;
+                tick(memory, 4);
+                self.write_byte(memory, 0xFF00 + offset, self.a);
+                tick(memory, 4);
+                12
+            }
+
+            // POP HL
+            0xE1 => {
+                let lo = memory.read_byte(self.sp) as u16;
+                self.sp = self.sp.wrapping_add(1);
+                tick(memory, 4);
+                let hi = memory.read_byte(self.sp) as u16;
+                self.sp = self.sp.wrapping_add(1);
+                tick(memory, 4);
+                self.set_hl((hi << 8) | lo);
+                12
+            }
+
+            // LD (C), A
+            0xE2 => {
+                self.write_byte(memory, 0xFF00 + self.c as u16, self.a);
+                tick(memory, 4);
+                8
+            }
+
+            0xE3 => panic!("Illegal opcode 0xE3"),
+            0xE4 => panic!("Illegal opcode 0xE4"),
+
+            // PUSH HL
+            0xE5 => {
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.h);
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.l);
+                tick(memory, 4);
+                16
+            }
+
+            // AND d8
+            0xE6 => {
+                let val = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.alu_and(val);
+                8
+            }
+
+            // RST 20H
+            0xE7 => {
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, (self.pc >> 8) as u8);
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.pc as u8);
+                tick(memory, 4);
+                self.pc = 0x0020;
+                16
+            }
+
+            // ADD SP, r8
+            0xE8 => {
+                let val = self.fetch_byte(memory) as i8;
+                tick(memory, 4);
+                self.sp = self.alu_add_sp(val);
+                tick(memory, 4);
+                tick(memory, 4);
+                16
+            }
+
+            // JP HL
+            0xE9 => {
+                self.pc = self.hl();
+                4
+            }
+
+            // LD (a16), A
+            0xEA => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                self.write_byte(memory, addr, self.a);
+                tick(memory, 4);
+                16
+            }
+
+            0xEB => panic!("Illegal opcode 0xEB"),
+            0xEC => panic!("Illegal opcode 0xEC"),
+            0xED => panic!("Illegal opcode 0xED"),
+
+            // XOR d8
+            0xEE => {
+                let val = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.alu_xor(val);
+                8
+            }
+
+            // RST 28H
+            0xEF => {
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, (self.pc >> 8) as u8);
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.pc as u8);
+                tick(memory, 4);
+                self.pc = 0x0028;
+                16
+            }
+
+            // LDH A, (a8)
+            0xF0 => {
+                let offset = self.fetch_byte(memory) as u16;
+                tick(memory, 4);
+                self.a = self.read_byte(memory, 0xFF00 + offset);
+                tick(memory, 4);
+                12
+            }
+
+            // POP AF
+            0xF1 => {
+                let lo = memory.read_byte(self.sp) as u16;
+                self.sp = self.sp.wrapping_add(1);
+                tick(memory, 4);
+                let hi = memory.read_byte(self.sp) as u16;
+                self.sp = self.sp.wrapping_add(1);
+                tick(memory, 4);
+                self.set_af((hi << 8) | lo);
+                12
+            }
+
+            // LD A, (C)
+            0xF2 => {
+                self.a = self.read_byte(memory, 0xFF00 + self.c as u16);
+                tick(memory, 4);
+                8
+            }
+
+            // DI
+            0xF3 => {
+                self.ime = false;
+                4
+            }
+
+            0xF4 => panic!("Illegal opcode 0xF4"),
+
+            // PUSH AF
+            0xF5 => {
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.a);
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.f);
+                tick(memory, 4);
+                16
+            }
+
+            // OR d8
+            0xF6 => {
+                let val = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.alu_or(val);
+                8
+            }
+
+            // RST 30H
+            0xF7 => {
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, (self.pc >> 8) as u8);
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.pc as u8);
+                tick(memory, 4);
+                self.pc = 0x0030;
+                16
+            }
+
+            // LD HL, SP+r8
+            0xF8 => {
+                let val = self.fetch_byte(memory) as i8;
+                tick(memory, 4);
+                let result = self.alu_add_sp(val);
+                tick(memory, 4);
+                self.set_hl(result);
+                12
+            }
+
+            // LD SP, HL
+            0xF9 => {
+                self.sp = self.hl();
+                tick(memory, 4);
+                8
+            }
+
+            // LD A, (a16)
+            0xFA => {
+                let lo = self.fetch_byte(memory);
+                tick(memory, 4);
+                let hi = self.fetch_byte(memory);
+                tick(memory, 4);
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                self.a = self.read_byte(memory, addr);
+                tick(memory, 4);
+                16
+            }
+
+            // EI
+            0xFB => {
+                self.ime_pending = true;
+                4
+            }
+
+            0xFC => panic!("Illegal opcode 0xFC"),
+            0xFD => panic!("Illegal opcode 0xFD"),
+
+            // CP d8
+            0xFE => {
+                let val = self.fetch_byte(memory);
+                tick(memory, 4);
+                self.alu_cp(val);
+                8
+            }
+
+            // RST 38H
+            0xFF => {
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, (self.pc >> 8) as u8);
+                tick(memory, 4);
+                self.sp = self.sp.wrapping_sub(1);
+                memory.write_byte(self.sp, self.pc as u8);
+                tick(memory, 4);
+                self.pc = 0x0038;
+                16
+            }
+        }
+    }
+
+    /// Execute a CB-prefixed instruction with M-cycle accurate timing
+    fn execute_cb_mcycle<F>(&mut self, memory: &mut Memory, tick: &mut F) -> u32
+    where
+        F: FnMut(&mut Memory, u32),
+    {
+        let opcode = self.fetch_byte(memory);
+        tick(memory, 4);
+
+        let reg_idx = opcode & 0x07;
+        let is_hl = reg_idx == 6;
+
+        // For (HL) operations, we need additional M-cycles for read and possibly write
+        let get_reg = |cpu: &Cpu, mem: &Memory, idx: u8| -> u8 {
+            match idx {
+                0 => cpu.b,
+                1 => cpu.c,
+                2 => cpu.d,
+                3 => cpu.e,
+                4 => cpu.h,
+                5 => cpu.l,
+                6 => cpu.read_byte(mem, cpu.hl()),
+                7 => cpu.a,
+                _ => unreachable!(),
+            }
+        };
+
+        let val = get_reg(self, memory, reg_idx);
+        if is_hl {
+            tick(memory, 4);
+        }
+
+        let (result, needs_write) = match opcode {
+            0x00..=0x07 => (self.alu_rlc(val), true),
+            0x08..=0x0F => (self.alu_rrc(val), true),
+            0x10..=0x17 => (self.alu_rl(val), true),
+            0x18..=0x1F => (self.alu_rr(val), true),
+            0x20..=0x27 => (self.alu_sla(val), true),
+            0x28..=0x2F => (self.alu_sra(val), true),
+            0x30..=0x37 => (self.alu_swap(val), true),
+            0x38..=0x3F => (self.alu_srl(val), true),
+            0x40..=0x7F => {
+                let bit = (opcode >> 3) & 0x07;
+                self.alu_bit(bit, val);
+                (0, false) // BIT doesn't write back
+            }
+            0x80..=0xBF => {
+                let bit = (opcode >> 3) & 0x07;
+                (self.alu_res(bit, val), true)
+            }
+            0xC0..=0xFF => {
+                let bit = (opcode >> 3) & 0x07;
+                (self.alu_set(bit, val), true)
+            }
+        };
+
+        if needs_write {
+            match reg_idx {
+                0 => self.b = result,
+                1 => self.c = result,
+                2 => self.d = result,
+                3 => self.e = result,
+                4 => self.h = result,
+                5 => self.l = result,
+                6 => {
+                    self.write_byte(memory, self.hl(), result);
+                    tick(memory, 4);
+                }
+                7 => self.a = result,
+                _ => unreachable!(),
+            }
+        }
+
+        // Return cycles: 8 for register, 16 for (HL) with write, 12 for BIT (HL)
+        if is_hl {
+            if needs_write { 16 } else { 12 }
+        } else {
+            8
         }
     }
 }
