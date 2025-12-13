@@ -2,6 +2,7 @@ mod apu;
 mod cpu;
 mod memory;
 mod ppu;
+mod test_runner;
 mod timer;
 
 use apu::Apu;
@@ -303,11 +304,49 @@ fn main() {
 
     if args.len() < 2 {
         eprintln!("Usage: {} <rom.gb>", args[0]);
+        eprintln!("       {} --test [test_dir]", args[0]);
         eprintln!();
         eprintln!("GB3000 - A Game Boy Emulator");
         eprintln!();
-        eprintln!("Please provide a Game Boy ROM file (.gb) as an argument.");
+        eprintln!("Options:");
+        eprintln!("  <rom.gb>     Run a Game Boy ROM file");
+        eprintln!("  --test       Run Blargg test ROMs (default: test_roms/blargg/cpu_instrs/individual/)");
         std::process::exit(1);
+    }
+
+    // Check for test mode
+    if args[1] == "--test" {
+        let test_dir = args.get(2).map(|s| s.as_str()).unwrap_or("test_roms/blargg/cpu_instrs/individual");
+        println!("╔══════════════════════════════════════╗");
+        println!("║      GB3000 Test Runner              ║");
+        println!("╚══════════════════════════════════════╝");
+        println!();
+        println!("Running tests from: {}", test_dir);
+        println!();
+        
+        let results = test_runner::run_all_tests(test_dir);
+        
+        println!();
+        println!("════════════════════════════════════════");
+        println!("                SUMMARY                 ");
+        println!("════════════════════════════════════════");
+        
+        let passed = results.iter().filter(|r| r.passed).count();
+        let failed = results.iter().filter(|r| !r.passed).count();
+        
+        for result in &results {
+            let status = if result.passed { "✓ PASS" } else { "✗ FAIL" };
+            println!("{} {}", status, result.name);
+        }
+        
+        println!();
+        println!("Passed: {}/{}", passed, results.len());
+        println!("Failed: {}/{}", failed, results.len());
+        
+        if failed > 0 {
+            std::process::exit(1);
+        }
+        return;
     }
 
     let rom_path = &args[1];

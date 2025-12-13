@@ -4,3 +4,6 @@
 # ROM files
 *.gb
 *.gbc
+
+# Test ROMs (download separately)
+/test_roms/
