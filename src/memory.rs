@@ -109,6 +109,8 @@ pub struct Memory {
     dma_active: bool,
     dma_source: u16,
     dma_offset: u8,
+    /// DMA cycle counter (counts up to 4 for each byte transfer)
+    dma_cycles: u8,
     /// Timer register write flags (for timer to process)
     pub timer_div_written: bool,
     pub timer_tac_written: bool,
@@ -146,6 +148,7 @@ impl Memory {
             dma_active: false,
             dma_source: 0,
             dma_offset: 0,
+            dma_cycles: 0,
             timer_div_written: false,
             timer_tac_written: false,
             timer_tac_old_value: 0,
@@ -512,6 +515,7 @@ impl Memory {
                 self.dma_source = (value as u16) << 8;
                 self.dma_active = true;
                 self.dma_offset = 0;
+                self.dma_cycles = 0;
                 self.data[addr as usize] = value;
             }
             
@@ -535,19 +539,32 @@ impl Memory {
         }
     }
 
-    /// Performs one step of DMA transfer (if active)
+    /// Performs one T-cycle of DMA transfer (if active)
+    /// Each byte transfer takes 4 T-cycles
     pub fn tick_dma(&mut self) {
         if self.dma_active {
-            let src = self.dma_source + self.dma_offset as u16;
-            let dst = 0xFE00 + self.dma_offset as u16;
-            let val = self.read_byte(src);
-            self.data[dst as usize] = val;
+            self.dma_cycles += 1;
             
-            self.dma_offset += 1;
-            if self.dma_offset >= 160 {
-                self.dma_active = false;
+            // Transfer one byte every 4 T-cycles
+            if self.dma_cycles >= 4 {
+                self.dma_cycles = 0;
+                
+                let src = self.dma_source + self.dma_offset as u16;
+                let dst = 0xFE00 + self.dma_offset as u16;
+                let val = self.read_byte(src);
+                self.data[dst as usize] = val;
+                
+                self.dma_offset += 1;
+                if self.dma_offset >= 160 {
+                    self.dma_active = false;
+                }
             }
         }
+    }
+    
+    /// Check if DMA is currently active
+    pub fn is_dma_active(&self) -> bool {
+        self.dma_active
     }
 
     /// Request an interrupt
