@@ -90,8 +90,16 @@ impl Emulator {
 
     /// Execute a single CPU step and update all subsystems
     pub fn step(&mut self) -> u32 {
-        // Handle interrupts
-        self.handle_interrupts();
+        // Handle interrupts (may consume 20 cycles if interrupt is serviced)
+        let intr_cycles = self.handle_interrupts();
+        if intr_cycles > 0 {
+            self.timer.tick(&mut self.memory, intr_cycles);
+            self.ppu.tick(&mut self.memory, intr_cycles);
+            self.apu.tick(&self.memory, intr_cycles);
+            for _ in 0..intr_cycles {
+                self.memory.tick_dma();
+            }
+        }
 
         // Execute CPU instruction
         let cycles = self.cpu.step(&mut self.memory);
@@ -110,11 +118,11 @@ impl Emulator {
             self.memory.tick_dma();
         }
 
-        cycles
+        cycles + intr_cycles
     }
 
-    /// Handle pending interrupts
-    fn handle_interrupts(&mut self) {
+    /// Handle pending interrupts. Returns cycles consumed (20 if interrupt was serviced)
+    fn handle_interrupts(&mut self) -> u32 {
         // Wake from HALT if any interrupt is pending (even if IME is disabled)
         if self.memory.pending_interrupts() != 0 {
             self.cpu.halted = false;
@@ -122,12 +130,12 @@ impl Emulator {
 
         // Only service interrupts if IME is enabled
         if !self.cpu.ime {
-            return;
+            return 0;
         }
 
         let pending = self.memory.pending_interrupts();
         if pending == 0 {
-            return;
+            return 0;
         }
 
         // Disable interrupts
@@ -157,6 +165,9 @@ impl Emulator {
             self.memory.clear_interrupt(interrupts::JOYPAD);
             self.cpu.pc = 0x0060;
         }
+        
+        // Interrupt dispatch takes 5 M-cycles = 20 T-cycles
+        20
     }
 
     /// Update joypad state from window keys

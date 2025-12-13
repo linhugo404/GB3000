@@ -306,6 +306,9 @@ impl Memory {
             // Joypad register
             0xFF00 => self.read_joypad(),
             
+            // IF register - bits 5-7 always read as 1
+            0xFF0F => self.data[addr as usize] | 0xE0,
+            
             // Not usable area
             0xFEA0..=0xFEFF => 0xFF,
             
@@ -519,6 +522,11 @@ impl Memory {
             io::STAT => {
                 // Lower 3 bits are read-only
                 self.data[addr as usize] = (value & 0xF8) | (self.data[addr as usize] & 0x07);
+            }
+            
+            io::IF => {
+                // Only bits 0-4 are writable
+                self.data[addr as usize] = value & 0x1F;
             }
             
             _ => {

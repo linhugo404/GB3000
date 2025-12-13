@@ -80,8 +80,16 @@ pub fn run_test(rom_path: &str) -> TestResult {
             };
         }
 
-        // Handle interrupts
-        handle_interrupts(&mut cpu, &mut memory);
+        // Handle interrupts (returns cycles consumed, 20 if interrupt was serviced)
+        let intr_cycles = handle_interrupts(&mut cpu, &mut memory);
+        if intr_cycles > 0 {
+            total_cycles += intr_cycles as u64;
+            timer.tick(&mut memory, intr_cycles);
+            ppu.tick(&mut memory, intr_cycles);
+            for _ in 0..intr_cycles {
+                memory.tick_dma();
+            }
+        }
 
         // Save PC before execution
         prev_pc = cpu.pc;
@@ -209,20 +217,20 @@ pub fn run_test(rom_path: &str) -> TestResult {
     }
 }
 
-/// Handle pending interrupts
-fn handle_interrupts(cpu: &mut Cpu, memory: &mut Memory) {
+/// Handle pending interrupts. Returns cycles consumed (20 if interrupt was serviced, 0 otherwise)
+fn handle_interrupts(cpu: &mut Cpu, memory: &mut Memory) -> u32 {
     // Wake from HALT if any interrupt is pending
     if memory.pending_interrupts() != 0 {
         cpu.halted = false;
     }
 
     if !cpu.ime {
-        return;
+        return 0;
     }
 
     let pending = memory.pending_interrupts();
     if pending == 0 {
-        return;
+        return 0;
     }
 
     cpu.ime = false;
@@ -252,6 +260,9 @@ fn handle_interrupts(cpu: &mut Cpu, memory: &mut Memory) {
         memory.clear_interrupt(interrupts::JOYPAD);
         cpu.pc = 0x0060;
     }
+    
+    // Interrupt dispatch takes 5 M-cycles = 20 T-cycles
+    20
 }
 
 /// Run all tests in a directory or a single test file
