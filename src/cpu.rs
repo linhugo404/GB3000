@@ -44,6 +44,8 @@ pub struct Cpu {
     pub halted: bool,
     // CPU stopped state
     pub stopped: bool,
+    // HALT bug: next instruction's first byte is read twice
+    halt_bug: bool,
 }
 
 impl Cpu {
@@ -64,6 +66,7 @@ impl Cpu {
             ime_pending: false,
             halted: false,
             stopped: false,
+            halt_bug: false,
         }
     }
 
@@ -83,6 +86,7 @@ impl Cpu {
         self.ime_pending = false;
         self.halted = false;
         self.stopped = false;
+        self.halt_bug = false;
     }
 
     // ========== Flag helpers ==========
@@ -186,7 +190,13 @@ impl Cpu {
     #[inline]
     fn fetch_byte(&mut self, memory: &Memory) -> u8 {
         let val = memory.read_byte(self.pc);
-        self.pc = self.pc.wrapping_add(1);
+        // HALT bug: PC doesn't increment after the first fetch following HALT bug trigger
+        if self.halt_bug {
+            self.halt_bug = false;
+            // Don't increment PC - the byte will be read again
+        } else {
+            self.pc = self.pc.wrapping_add(1);
+        }
         val
     }
 
@@ -886,7 +896,14 @@ impl Cpu {
             0x74 => { self.write_byte(memory, self.hl(), self.h); 8 }
             0x75 => { self.write_byte(memory, self.hl(), self.l); 8 }
             0x76 => { // HALT
-                self.halted = true;
+                // Check for HALT bug: if IME=0 and an interrupt is pending
+                let pending = memory.pending_interrupts();
+                if !self.ime && pending != 0 {
+                    // HALT bug: don't halt, but next instruction's opcode is read twice
+                    self.halt_bug = true;
+                } else {
+                    self.halted = true;
+                }
                 4
             }
             0x77 => { self.write_byte(memory, self.hl(), self.a); 8 }
