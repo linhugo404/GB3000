@@ -65,19 +65,25 @@ fn setup_audio(
     Some(stream)
 }
 
-/// Scale Game Boy framebuffer to UI size
+/// Scale Game Boy framebuffer to UI size (optimized)
 fn scale_framebuffer(src: &[u8], dst: &mut [u32], palette: &[u32; 4]) {
-    let scale_x = UI_WIDTH / SCREEN_WIDTH;
-    let scale_y = UI_HEIGHT / SCREEN_HEIGHT;
-
-    for y in 0..UI_HEIGHT {
-        for x in 0..UI_WIDTH {
-            let src_x = x / scale_x;
-            let src_y = y / scale_y;
-            let src_idx = src_y * SCREEN_WIDTH + src_x;
-            let dst_idx = y * UI_WIDTH + x;
-            if src_idx < src.len() && dst_idx < dst.len() {
-                dst[dst_idx] = palette[(src[src_idx] & 0x03) as usize];
+    const SCALE: usize = UI_WIDTH / SCREEN_WIDTH; // 4x scale
+    
+    // Pre-convert palette lookups for each source pixel
+    for src_y in 0..SCREEN_HEIGHT {
+        let src_row_start = src_y * SCREEN_WIDTH;
+        let dst_row_start = src_y * SCALE * UI_WIDTH;
+        
+        for src_x in 0..SCREEN_WIDTH {
+            let color = palette[(src[src_row_start + src_x] & 0x03) as usize];
+            let dst_x_start = src_x * SCALE;
+            
+            // Fill the scaled block
+            for dy in 0..SCALE {
+                let row_offset = (dy * UI_WIDTH) + dst_x_start;
+                for dx in 0..SCALE {
+                    dst[dst_row_start + row_offset + dx] = color;
+                }
             }
         }
     }
