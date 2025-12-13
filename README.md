@@ -66,15 +66,20 @@ cargo run --release -- --test test_roms/mooneye-test-suite/acceptance
 |------------|-----------|-------|
 | Blargg CPU Instructions | **11/11** ✓ | All CPU opcodes correct |
 | Blargg Instruction Timing | **1/1** ✓ | Instruction timing accurate |
-| Mooneye MBC1 | 9/13 | Core banking works, edge cases pending |
-| Mooneye Timer | 11/13 | Accurate falling-edge detection |
-| Mooneye OAM DMA | 2/3 | Basic DMA working |
-| Mooneye Acceptance | 8/41 | Interrupt/timing tests passing |
+| Mooneye MBC1 | **9/13** | Core banking works |
+| Mooneye Timer | **11/13** | Accurate falling-edge detection |
+| Mooneye Acceptance | **13/41** | Core interrupt/timing tests |
+
+**Passing Acceptance Tests:**
+- Interrupt timing (di_timing, ei_timing, ei_sequence, intr_timing)
+- HALT behavior (halt_ime0_*, halt_ime1_*)
+- RETI timing, div_timing, if_ie_registers
+- Boot registers (DMG-ABC)
 
 The remaining failures are primarily:
 - Sub-instruction cycle timing (memory access timing within instructions)
-- PPU mode transition timing (precise scanline timing)
-- Rare edge cases in MBC1 (multicart, large ROMs)
+- Tests for non-DMG hardware (MGB, SGB, SGB2, DMG-0)
+- PPU mode transition timing
 
 ## Architecture
 
