@@ -205,12 +205,13 @@ pub fn run_test(rom_path: &str) -> TestResult {
 
         // Also check memory signature for test completion
         // Blargg tests write 0 to 0xA000 on success, non-zero on failure
-        // And they set specific patterns when done
-        if memory.data[0xA001] == 0xDE
-            && memory.data[0xA002] == 0xB0
-            && memory.data[0xA003] == 0x61
+        // And they set specific patterns when done (signature DE B0 61 at 0xA001-0xA003)
+        // Must read through read_byte to properly access external RAM
+        if memory.read_byte(0xA001) == 0xDE
+            && memory.read_byte(0xA002) == 0xB0
+            && memory.read_byte(0xA003) == 0x61
         {
-            let status = memory.data[0xA000];
+            let status = memory.read_byte(0xA000);
             return TestResult {
                 name,
                 passed: status == 0,

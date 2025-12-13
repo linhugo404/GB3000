@@ -370,6 +370,39 @@ impl Memory {
             // IF register - bits 5-7 always read as 1
             0xFF0F => self.data[addr as usize] | 0xE0,
             
+            // APU registers have specific read masks
+            // Many bits are write-only and read back as 1
+            0xFF10 => self.data[addr as usize] | 0x80, // NR10: bit 7 unused
+            0xFF11 => self.data[addr as usize] | 0x3F, // NR11: bits 0-5 write-only
+            0xFF12 => self.data[addr as usize],         // NR12: fully readable
+            0xFF13 => 0xFF,                             // NR13: write-only
+            0xFF14 => self.data[addr as usize] | 0xBF, // NR14: bits 0-5,7 write-only
+            0xFF15 => 0xFF,                             // Unused
+            0xFF16 => self.data[addr as usize] | 0x3F, // NR21: bits 0-5 write-only
+            0xFF17 => self.data[addr as usize],         // NR22: fully readable
+            0xFF18 => 0xFF,                             // NR23: write-only
+            0xFF19 => self.data[addr as usize] | 0xBF, // NR24: bits 0-5,7 write-only
+            0xFF1A => self.data[addr as usize] | 0x7F, // NR30: bit 7 only readable
+            0xFF1B => 0xFF,                             // NR31: write-only
+            0xFF1C => self.data[addr as usize] | 0x9F, // NR32: bits 5-6 readable
+            0xFF1D => 0xFF,                             // NR33: write-only
+            0xFF1E => self.data[addr as usize] | 0xBF, // NR34: bit 6 readable
+            0xFF1F => 0xFF,                             // Unused
+            0xFF20 => 0xFF,                             // NR41: write-only
+            0xFF21 => self.data[addr as usize],         // NR42: fully readable
+            0xFF22 => self.data[addr as usize],         // NR43: fully readable
+            0xFF23 => self.data[addr as usize] | 0xBF, // NR44: bit 6 readable
+            0xFF24 => self.data[addr as usize],         // NR50: fully readable
+            0xFF25 => self.data[addr as usize],         // NR51: fully readable
+            0xFF26 => {
+                // NR52: bits 0-3 are read-only channel enable status, bit 7 is R/W
+                // Bits 4-6 are unused and read as 1
+                let status = self.data[addr as usize] & 0x8F; // Keep bit 7 and channel status
+                status | 0x70 // Set unused bits 4-6
+            }
+            0xFF27..=0xFF2F => 0xFF,                   // Unused APU registers
+            0xFF30..=0xFF3F => self.data[addr as usize], // Wave RAM
+            
             // Not usable area
             0xFEA0..=0xFEFF => 0xFF,
             

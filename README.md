@@ -66,6 +66,7 @@ cargo run --release -- --test test_roms/mooneye-test-suite/acceptance
 |------------|-----------|-------|
 | Blargg CPU Instructions | **11/11** ✓ | All CPU opcodes correct |
 | Blargg Instruction Timing | **1/1** ✓ | Instruction timing accurate |
+| Blargg DMG Sound | **12/12** ✓ | All APU register tests pass |
 | Mooneye MBC1 | **12/13** | 64KB RAM, 8MB/16MB ROM support |
 | Mooneye Timer | **11/13** | Accurate falling-edge detection |
 | Mooneye Acceptance | **18/41** | Multi-model support |
