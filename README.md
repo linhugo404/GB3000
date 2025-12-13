@@ -68,17 +68,22 @@ cargo run --release -- --test test_roms/mooneye-test-suite/acceptance
 | Blargg Instruction Timing | **1/1** ✓ | Instruction timing accurate |
 | Mooneye MBC1 | **9/13** | Core banking works |
 | Mooneye Timer | **11/13** | Accurate falling-edge detection |
-| Mooneye Acceptance | **13/41** | Core interrupt/timing tests |
+| Mooneye Acceptance | **14/41** | M-cycle accurate execution |
 
-**Passing Acceptance Tests:**
+**Passing Acceptance Tests (14):**
 - Interrupt timing (di_timing, ei_timing, ei_sequence, intr_timing)
 - HALT behavior (halt_ime0_*, halt_ime1_*)
-- RETI timing, div_timing, if_ie_registers
+- RETI timing, div_timing, if_ie_registers, pop_timing
 - Boot registers (DMG-ABC)
 
+**M-cycle Accurate Execution:**
+The CPU now executes with M-cycle (4 T-cycle) granularity:
+- Timer, PPU, and DMA updated between memory accesses
+- Enables accurate testing of instruction timing
+
 The remaining failures are primarily:
-- Sub-instruction cycle timing (memory access timing within instructions)
 - Tests for non-DMG hardware (MGB, SGB, SGB2, DMG-0)
+- Complex instruction timing edge cases
 - PPU mode transition timing
 
 ## Architecture
