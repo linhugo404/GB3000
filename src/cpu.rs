@@ -13,6 +13,56 @@ const FLAG_N: u8 = 0b0100_0000; // Subtract flag
 const FLAG_H: u8 = 0b0010_0000; // Half-carry flag
 const FLAG_C: u8 = 0b0001_0000; // Carry flag
 
+/// Game Boy hardware model variants
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum GbModel {
+    /// Original Game Boy (CPU revision 0) - very early units
+    Dmg0,
+    /// Original Game Boy (CPU revision A/B/C) - most common
+    #[default]
+    DmgABC,
+    /// Game Boy Pocket
+    Mgb,
+    /// Super Game Boy
+    Sgb,
+    /// Super Game Boy 2
+    Sgb2,
+    /// Game Boy Color
+    Cgb,
+}
+
+impl GbModel {
+    /// Detect hardware model from ROM filename/path
+    pub fn from_filename(filename: &str) -> Self {
+        let lower = filename.to_lowercase();
+        
+        // Check for specific model indicators in filename
+        if lower.contains("-dmg0") || lower.contains("_dmg0") {
+            GbModel::Dmg0
+        } else if lower.contains("-mgb") || lower.contains("_mgb") {
+            GbModel::Mgb
+        } else if lower.contains("-sgb2") || lower.contains("_sgb2") {
+            GbModel::Sgb2
+        } else if lower.contains("-sgb") || lower.contains("_sgb") {
+            GbModel::Sgb
+        } else if lower.contains("-cgb") || lower.contains("_cgb") || lower.contains("-gbc") {
+            GbModel::Cgb
+        } else if lower.contains("-dmgabc") || lower.contains("_dmgabc") || lower.contains("-dmg") {
+            GbModel::DmgABC
+        } else if lower.contains("-gs") {
+            // GS suffix in Mooneye tests typically means "Game Boy + Super Game Boy"
+            // These should work on DMG
+            GbModel::DmgABC
+        } else if lower.contains("-s") && !lower.contains("-sgb") {
+            // -S suffix often means SGB-specific timing
+            GbModel::Sgb
+        } else {
+            // Default to DMG-ABC (most common)
+            GbModel::DmgABC
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Cpu {
     // 8-bit registers
@@ -61,16 +111,86 @@ impl Cpu {
         }
     }
 
-    /// Resets the CPU registers to the power-on state of the original Game Boy.
+    /// Resets the CPU registers to the power-on state for DMG-ABC (default)
     pub fn reset(&mut self) {
-        self.a = 0x01;
-        self.f = 0xB0;
-        self.b = 0x00;
-        self.c = 0x13;
-        self.d = 0x00;
-        self.e = 0xD8;
-        self.h = 0x01;
-        self.l = 0x4D;
+        self.reset_for_model(GbModel::DmgABC);
+    }
+
+    /// Resets the CPU registers to the power-on state for the specified hardware model.
+    /// Each Game Boy model has different initial register values after boot ROM execution.
+    pub fn reset_for_model(&mut self, model: GbModel) {
+        // Initial register values vary by hardware model
+        // These are the values after the boot ROM completes
+        match model {
+            GbModel::Dmg0 => {
+                // Early DMG (CPU revision 0)
+                self.a = 0x01;
+                self.f = 0x00; // Different from DMG-ABC!
+                self.b = 0xFF;
+                self.c = 0x13;
+                self.d = 0x00;
+                self.e = 0xC1;
+                self.h = 0x84;
+                self.l = 0x03;
+            }
+            GbModel::DmgABC => {
+                // Standard DMG (CPU revision A/B/C) - most common
+                self.a = 0x01;
+                self.f = 0xB0;
+                self.b = 0x00;
+                self.c = 0x13;
+                self.d = 0x00;
+                self.e = 0xD8;
+                self.h = 0x01;
+                self.l = 0x4D;
+            }
+            GbModel::Mgb => {
+                // Game Boy Pocket
+                self.a = 0xFF;
+                self.f = 0xB0;
+                self.b = 0x00;
+                self.c = 0x13;
+                self.d = 0x00;
+                self.e = 0xD8;
+                self.h = 0x01;
+                self.l = 0x4D;
+            }
+            GbModel::Sgb => {
+                // Super Game Boy
+                self.a = 0x01;
+                self.f = 0x00;
+                self.b = 0x00;
+                self.c = 0x14;
+                self.d = 0x00;
+                self.e = 0x00;
+                self.h = 0xC0;
+                self.l = 0x60;
+            }
+            GbModel::Sgb2 => {
+                // Super Game Boy 2
+                self.a = 0xFF;
+                self.f = 0x00;
+                self.b = 0x00;
+                self.c = 0x14;
+                self.d = 0x00;
+                self.e = 0x00;
+                self.h = 0xC0;
+                self.l = 0x60;
+            }
+            GbModel::Cgb => {
+                // Game Boy Color (running in DMG mode)
+                self.a = 0x11;
+                self.f = 0x80;
+                self.b = 0x00;
+                self.c = 0x00;
+                self.d = 0xFF;
+                self.e = 0x56;
+                self.h = 0x00;
+                self.l = 0x0D;
+            }
+        }
+
+        // Common initial values for all models
         self.sp = 0xFFFE;
         self.pc = 0x0100;
         self.ime = false;

@@ -68,22 +68,29 @@ cargo run --release -- --test test_roms/mooneye-test-suite/acceptance
 | Blargg Instruction Timing | **1/1** ✓ | Instruction timing accurate |
 | Mooneye MBC1 | **9/13** | Core banking works |
 | Mooneye Timer | **11/13** | Accurate falling-edge detection |
-| Mooneye Acceptance | **14/41** | M-cycle accurate execution |
+| Mooneye Acceptance | **18/41** | Multi-model support |
 
-**Passing Acceptance Tests (14):**
+**Passing Acceptance Tests (18):**
+- Boot registers (DMG-ABC, DMG-0, MGB, SGB, SGB2)
 - Interrupt timing (di_timing, ei_timing, ei_sequence, intr_timing)
 - HALT behavior (halt_ime0_*, halt_ime1_*)
 - RETI timing, div_timing, if_ie_registers, pop_timing
-- Boot registers (DMG-ABC)
+
+**Hardware Model Support:**
+The emulator automatically detects and emulates different Game Boy models:
+- DMG-0 (early Game Boy)
+- DMG-ABC (standard Game Boy) 
+- MGB (Game Boy Pocket)
+- SGB/SGB2 (Super Game Boy)
+- CGB (Game Boy Color)
 
 **M-cycle Accurate Execution:**
-The CPU now executes with M-cycle (4 T-cycle) granularity:
+The CPU executes with M-cycle (4 T-cycle) granularity:
 - Timer, PPU, and DMA updated between memory accesses
 - Enables accurate testing of instruction timing
 
 The remaining failures are primarily:
-- Tests for non-DMG hardware (MGB, SGB, SGB2, DMG-0)
-- Complex instruction timing edge cases
+- Complex instruction timing edge cases (PUSH, CALL, RET)
 - PPU mode transition timing
 
 ## Architecture

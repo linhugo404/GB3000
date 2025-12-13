@@ -4,7 +4,7 @@
 /// 1. Blargg tests - output via serial port, "Passed"/"Failed" in output
 /// 2. Mooneye tests - execute LD B,B when done, Fibonacci registers on success
 
-use crate::cpu::Cpu;
+use crate::cpu::{Cpu, GbModel};
 use crate::memory::Memory;
 use crate::ppu::Ppu;
 use crate::timer::Timer;
@@ -51,6 +51,9 @@ pub fn run_test(rom_path: &str) -> TestResult {
         }
     };
 
+    // Detect hardware model from filename
+    let model = GbModel::from_filename(rom_path);
+
     // Initialize emulator components
     let mut cpu = Cpu::new();
     let mut memory = Memory::new();
@@ -58,7 +61,7 @@ pub fn run_test(rom_path: &str) -> TestResult {
     let mut timer = Timer::new();
 
     memory.load_rom(&rom);
-    cpu.reset();
+    cpu.reset_for_model(model);
 
     // Serial output buffer
     let mut serial_output = String::new();
