@@ -718,6 +718,25 @@ impl Memory {
             self.request_interrupt(interrupts::JOYPAD);
         }
     }
+
+    /// Check if the cartridge has battery-backed RAM
+    pub fn has_battery(&self) -> bool {
+        // Any MBC with RAM can potentially have battery backup
+        // We check if RAM exists (ram_bank_count > 0)
+        self.ram_bank_count > 0
+    }
+
+    /// Get the external RAM contents
+    pub fn get_eram(&self) -> &[u8] {
+        let size = self.ram_bank_count as usize * 0x2000;
+        &self.eram[..size.min(self.eram.len())]
+    }
+
+    /// Set the external RAM contents (for loading saves)
+    pub fn set_eram(&mut self, data: &[u8]) {
+        let size = data.len().min(self.eram.len());
+        self.eram[..size].copy_from_slice(&data[..size]);
+    }
 }
 
 impl Default for Memory {

@@ -299,6 +299,29 @@ impl Emulator {
         self.ppu.frame_ready
     }
 
+    /// Check if the cartridge has battery-backed RAM (saveable)
+    pub fn has_battery(&self) -> bool {
+        self.memory.has_battery()
+    }
+
+    /// Get the external RAM (save data) for battery-backed cartridges
+    ///
+    /// Returns None if the cartridge has no RAM or no battery.
+    pub fn save_ram(&self) -> Option<Vec<u8>> {
+        if self.has_battery() {
+            Some(self.memory.get_eram().to_vec())
+        } else {
+            None
+        }
+    }
+
+    /// Load external RAM (save data) into the cartridge
+    ///
+    /// Use this to restore a saved game.
+    pub fn load_ram(&mut self, data: &[u8]) {
+        self.memory.set_eram(data);
+    }
+
     /// Parse ROM information from ROM data
     pub fn parse_rom_info(rom: &[u8]) -> Option<RomInfo> {
         if rom.len() < 0x150 {

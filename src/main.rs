@@ -94,6 +94,34 @@ fn load_rom_file(path: &PathBuf) -> Result<Vec<u8>, String> {
     fs::read(path).map_err(|e| format!("Failed to read ROM: {}", e))
 }
 
+/// Get the save file path for a ROM (same name with .sav extension)
+fn get_save_path(rom_path: &PathBuf) -> PathBuf {
+    rom_path.with_extension("sav")
+}
+
+/// Load save data if it exists
+fn load_save(emulator: &mut Emulator, rom_path: &PathBuf) {
+    let save_path = get_save_path(rom_path);
+    if save_path.exists() {
+        if let Ok(data) = fs::read(&save_path) {
+            emulator.load_ram(&data);
+            println!("Loaded save: {}", save_path.display());
+        }
+    }
+}
+
+/// Save game data to file
+fn save_game(emulator: &Emulator, rom_path: &PathBuf) {
+    if let Some(data) = emulator.save_ram() {
+        let save_path = get_save_path(rom_path);
+        if let Err(e) = fs::write(&save_path, &data) {
+            eprintln!("Failed to save: {}", e);
+        } else {
+            println!("Saved game: {}", save_path.display());
+        }
+    }
+}
+
 fn update_input(emulator: &mut Emulator, window: &Window) {
     emulator.set_button(Button::Right, window.is_key_down(Key::Right));
     emulator.set_button(Button::Left, window.is_key_down(Key::Left));
@@ -164,6 +192,7 @@ fn main() {
             }
             emulator.load_rom(&rom);
             emulator.reset();
+            load_save(&mut emulator, &path); // Load existing save
             ui.current_rom = Some(path);
             ui.state = EmulatorState::Running;
         }
@@ -225,10 +254,15 @@ fn main() {
         // Handle UI actions
         match action {
             UiAction::OpenFile => {
-                if let Some(path) = Ui::open_file_dialog() {
-                    if let Ok(rom) = load_rom_file(&path) {
+                if let Some(new_path) = Ui::open_file_dialog() {
+                    // Save current game before loading new one
+                    if let Some(ref old_path) = ui.current_rom {
+                        save_game(&emulator, old_path);
+                    }
+                    
+                    if let Ok(rom) = load_rom_file(&new_path) {
                         if let Some(info) = Emulator::parse_rom_info(&rom) {
-                            ui.add_recent_rom(path.clone(), info.title.clone());
+                            ui.add_recent_rom(new_path.clone(), info.title.clone());
                             ui.rom_info = Some(RomInfo {
                                 title: info.title,
                                 cart_type: info.cart_type,
@@ -239,7 +273,8 @@ fn main() {
                         emulator = Emulator::new();
                         emulator.load_rom(&rom);
                         emulator.reset();
-                        ui.current_rom = Some(path);
+                        load_save(&mut emulator, &new_path);
+                        ui.current_rom = Some(new_path);
                         ui.state = EmulatorState::Running;
                         ui.error_message = None;
                     } else {
@@ -247,8 +282,13 @@ fn main() {
                     }
                 }
             }
-            UiAction::LoadRom(path) => {
-                if let Ok(rom) = load_rom_file(&path) {
+            UiAction::LoadRom(new_path) => {
+                // Save current game before loading new one
+                if let Some(ref old_path) = ui.current_rom {
+                    save_game(&emulator, old_path);
+                }
+                
+                if let Ok(rom) = load_rom_file(&new_path) {
                     if let Some(info) = Emulator::parse_rom_info(&rom) {
                         ui.rom_info = Some(RomInfo {
                             title: info.title,
@@ -260,14 +300,23 @@ fn main() {
                     emulator = Emulator::new();
                     emulator.load_rom(&rom);
                     emulator.reset();
-                    ui.current_rom = Some(path);
+                    load_save(&mut emulator, &new_path);
+                    ui.current_rom = Some(new_path);
                     ui.state = EmulatorState::Running;
                     ui.error_message = None;
                 }
             }
             UiAction::Resume => ui.state = EmulatorState::Running,
             UiAction::Reset => {
+                // Save before reset (keeps the save file)
+                if let Some(ref path) = ui.current_rom {
+                    save_game(&emulator, path);
+                }
                 emulator.reset();
+                // Reload the save after reset
+                if let Some(ref path) = ui.current_rom {
+                    load_save(&mut emulator, path);
+                }
                 ui.state = EmulatorState::Running;
             }
             UiAction::Quit => break,
@@ -288,12 +337,17 @@ fn main() {
             last_fps_time = Instant::now();
         }
 
-        // Frame timing - sleep to maintain 60 FPS
+        // Frame timing - sleep to maintain ~59.7 FPS
         let elapsed = frame_start.elapsed();
         let target = Duration::from_nanos(FRAME_TIME_NS);
         if elapsed < target {
             spin_sleep::sleep(target - elapsed);
         }
+    }
+
+    // Save game on exit
+    if let Some(ref path) = ui.current_rom {
+        save_game(&emulator, path);
     }
 }
 
