@@ -122,6 +122,9 @@ pub struct Memory {
     pub timer_tima_written: bool,
     pub timer_tima_new_value: u8,
     pub timer_tma_written: bool,
+    /// PPU register write flags (for STAT interrupt handling)
+    pub stat_written: bool,
+    pub lyc_written: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -161,6 +164,8 @@ impl Memory {
             timer_tima_written: false,
             timer_tima_new_value: 0,
             timer_tma_written: false,
+            stat_written: false,
+            lyc_written: false,
         };
         // Initialize registers to post-boot ROM values (DMG)
         // These are the values after the boot ROM has finished executing
@@ -651,6 +656,12 @@ impl Memory {
             io::STAT => {
                 // Lower 3 bits are read-only
                 self.data[addr as usize] = (value & 0xF8) | (self.data[addr as usize] & 0x07);
+                self.stat_written = true;
+            }
+            
+            io::LYC => {
+                self.data[addr as usize] = value;
+                self.lyc_written = true;
             }
             
             io::IF => {

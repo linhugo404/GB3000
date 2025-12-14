@@ -110,6 +110,15 @@ pub fn run_test(rom_path: &str) -> TestResult {
             
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 cpu.step_mcycle(&mut memory, |mem, tcycles| {
+                    // Handle PPU register writes
+                    if mem.stat_written {
+                        mem.stat_written = false;
+                        ppu_ref.on_stat_write(mem);
+                    }
+                    if mem.lyc_written {
+                        mem.lyc_written = false;
+                        ppu_ref.on_lyc_write(mem);
+                    }
                     timer_ref.tick(mem, tcycles);
                     ppu_ref.tick(mem, tcycles);
                     for _ in 0..tcycles {

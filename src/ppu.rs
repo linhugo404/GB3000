@@ -287,7 +287,13 @@ impl Ppu {
         // Calculate if any STAT interrupt condition is true
         let mode_0_condition = (stat & 0x08 != 0) && self.mode == Mode::HBlank;
         let mode_1_condition = (stat & 0x10 != 0) && self.mode == Mode::VBlank;
-        let mode_2_condition = (stat & 0x20 != 0) && self.mode == Mode::OamScan;
+        
+        // Mode 2 source is ALSO briefly active at VBlank start (line 144, dot 0)
+        // This is the "VBlank Mode 2 stat bug"
+        let mode_2_source_active = self.mode == Mode::OamScan || 
+            (self.mode == Mode::VBlank && ly == 144 && self.dots == 0);
+        let mode_2_condition = (stat & 0x20 != 0) && mode_2_source_active;
+        
         let lyc_condition = (stat & 0x40 != 0) && (ly == lyc);
         
         let current_conditions = mode_0_condition || mode_1_condition || mode_2_condition || lyc_condition;
@@ -350,6 +356,30 @@ impl Ppu {
     /// Get current PPU mode
     pub fn current_mode(&self) -> Mode {
         self.mode
+    }
+    
+    /// Called when STAT register is written to
+    /// This can trigger an immediate STAT interrupt if write enables a currently true condition
+    pub fn on_stat_write(&mut self, memory: &mut Memory) {
+        // Re-evaluate STAT conditions after write
+        self.handle_stat_interrupt(memory);
+    }
+    
+    /// Called when LYC register is written to
+    /// This can trigger an immediate STAT interrupt if LY == new LYC and LYC interrupt is enabled
+    pub fn on_lyc_write(&mut self, memory: &mut Memory) {
+        // Update the LY=LYC flag in STAT
+        let ly = memory.data[io::LY as usize];
+        let lyc = memory.data[io::LYC as usize];
+        
+        if ly == lyc {
+            memory.data[io::STAT as usize] |= 0x04;
+        } else {
+            memory.data[io::STAT as usize] &= !0x04;
+        }
+        
+        // Check for STAT interrupt
+        self.handle_stat_interrupt(memory);
     }
 
     /// Scan OAM for sprites on the given scanline

@@ -194,6 +194,16 @@ impl Emulator {
         // Execute CPU instruction
         let cycles = self.cpu.step(&mut self.memory);
 
+        // Check for PPU register writes that need immediate processing
+        if self.memory.stat_written {
+            self.memory.stat_written = false;
+            self.ppu.on_stat_write(&mut self.memory);
+        }
+        if self.memory.lyc_written {
+            self.memory.lyc_written = false;
+            self.ppu.on_lyc_write(&mut self.memory);
+        }
+
         // Update subsystems
         self.timer.tick(&mut self.memory, cycles);
         self.ppu.tick(&mut self.memory, cycles);
